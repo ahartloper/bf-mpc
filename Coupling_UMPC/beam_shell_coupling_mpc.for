@@ -25,9 +25,12 @@ C *************************************************************************** C
       ! Centroids (deformed and reference)
       REAL(8)               :: XC(NDIM), XC0(NDIM)
       ! First shell node (deformed and translated reference)
-      REAL(8)               :: x_s1(NDIM), x_s1t(NDIM)
+      REAL(8)               :: x_s1(NDIM), x_s1_trans(NDIM), 
+     1                         x_s1_fit(NDIM)
       ! Rotation matrices (to get deformed, reference)
       REAL(8)               :: R_mat(NDIM, NDIM), R_ref(NDIM, NDIM)
+      ! Orientation normal to beam plane
+      REAL(8)               :: axial_orient(NDIM)
       ! Arrays that depend on the number of nodes
       REAL(8), ALLOCATABLE  :: C_mat(:, :), D_mat(:, :), G_mat(:, :), 
      1                         Q_mat(:, :), 
@@ -68,14 +71,13 @@ C *************************************************************************** C
       n_reciprocal = ONE / n_shell
       XC0 = XC0 * n_reciprocal
       XC = XC * n_reciprocal
-      
+            
       ! Compute the reference configuration
       DO i = 1, n_shell
         X_ref(:, i) = X_shell(:, i) - XC0
       END DO
       R_ref = refConfig(X_ref)
       
-      ! Calculate the linearized rotation
       ! Compute the optimal rotation quaternion
       B_mat(:, :) = ZERO
       DO i = 1, n_shell
@@ -87,20 +89,23 @@ C *************************************************************************** C
       lam_q = getRotQuat(B_mat)
       lambda = lam_q(1)
       quat = lam_q(2:5)
+      quat = SIGN(ONE, quat(1)) * quat  ! positive first entry
+      
       ! Compute the linearized rotation matrix
       R_mat = rotMat(quat)
       G_mat = getG(quat, B_mat, C_mat, lambda, R_mat)
       Q_mat = getLinR(quat, G_mat)
       
       ! Calculate the warping amplitude
-      !x_s1 = X_shell(:, 1) + U_shell(:, 1)
-      !x_s1t = X_shell(:, 1) + (XC - XC0)
-      !warp_fun = getWarpFun0(X_ref(:, 1), R_ref)
-      !w_amp = getWarpAmp(x_s1, x_s1t, R_mat, warp_fun)      
-      !PRINT *, 'w_amp = ', w_amp
+      x_s1 = X_shell(:, 1) + U_shell(:, 1)
+      x_s1_trans = X_shell(:, 1) + (XC - XC0)
+      x_s1_fit = MATMUL(R_mat, x_s1_trans)
+      warp_fun = getWarpFun0(X_ref(:, 1), R_ref)
+      axial_orient(:) = MATMUL(R_mat, R_ref(:, 3))
+      w_amp = getWarpAmp(x_s1, x_s1_fit, axial_orient, warp_fun)
       
       ! Calculate the linearized warping
-      !lin_warp = getLinWarp(x_s1, x_s1t, R_mat, G_mat)
+      !lin_warp = getLinWarp(x_s1, x_s1_trans, R_mat, G_mat)
       
       ! Assign the A submatrix for the beam node
       FORALL(i = 1:6) A(i, i, 1) = ONE
@@ -129,8 +134,7 @@ C *************************************************************************** C
             
       ! Update the node DOF exactly
       UE(1:3) = XC - XC0
-      ! todo: use exact extraction of the quaternion
-      UE(4:6) = 2 * quat(2:4)
+      UE(4:6) = extractRotation(quat)
       !UE(7) = w_amp
       RETURN
       
@@ -315,7 +319,7 @@ C *************************************************************************** C
       ! Compute the linearized rotation matrix
       qrr = rightQuat(q(1), q(2:QUATDIM))
       qrr_3 = qrr(:, 2:QUATDIM)
-      QQ = SIGN(ONE, q(1)) * MATMUL(qrr_3(2:QUATDIM, :), G)
+      QQ = MATMUL(qrr_3(2:QUATDIM, :), G)
       
       END FUNCTION
 C *************************************************************************** C
@@ -324,25 +328,26 @@ C *************************************************************************** C
       PURE FUNCTION getOrientation(O) result(O2)
       ! Orders O to have the orientation x, y, z as the columns of O2
       REAL(8), intent(in) :: O(3, 3)
-      REAL(8)             :: O2(3, 3), x(3), y(3), z(3), cross_vec(3)
+      REAL(8)             :: O2(3, 3), xo(3), yo(3), zo(3), cross_vec(3)
+      REAL(8)             :: test
       ! z is always the first column, assume that y is the second column
-      z = O(:, 1)
-      y = O(:, 2)
-      x = O(:, 3)
+      zo = O(:, 1)
+      yo = O(:, 2)
+      xo = O(:, 3)
       ! Test to see if right-handed system
-      cross_vec(1) = y(2) * z(3) - y(3) * z(2)
-      cross_vec(2) = -(y(1) * z(3) - y(3) * z(1))
-      cross_vec(3) = y(1) * z(2) - y(2) * z(1)
-      t = DOT_PRODUCT(z, cross_vec)
-      IF (t .GE. 0) THEN
-        ! Correct assumption
-        O2(:, 1) = x
-        O2(:, 2) = y
-        O2(:, 3) = z
+      cross_vec(1) = yo(2) * zo(3) - yo(3) * zo(2)
+      cross_vec(2) = -(yo(1) * zo(3) - yo(3) * zo(1))
+      cross_vec(3) = yo(1) * zo(2) - yo(2) * zo(1)
+      test = DOT_PRODUCT(xo, cross_vec)
+      IF (test .GT. 0) THEN
+        ! Correct assumption, right hand system
+        O2(:, 1) = xo
+        O2(:, 2) = yo
+        O2(:, 3) = zo
       ELSE
-        O2(:, 1) = y
-        O2(:, 2) = x
-        O2(:, 3) = z
+        O2(:, 1) = yo
+        O2(:, 2) = xo
+        O2(:, 3) = zo
       END IF
       END FUNCTION
 C *************************************************************************** C
@@ -396,24 +401,26 @@ C *************************************************************************** C
       ! Input and output
       REAL(8), intent(in) :: xr_0(3), R0(3, 3)
       REAL(8)             :: psi_0
+      ! Internal
+      REAL(8)             :: s1, s2
       ! Function start
-      ! todo: need to project the reference on the R0 then take
-      psi_0 = 2.D0 * xr_0(1) * 2.D0 * xr_0(2) / 4.D0
+      ! s1 and s2 are the 2x the length projected onto local x and y axes
+      ! The point is assumed to be at x = -b/2 and y = (h-t_f)/2
+      !
+      s1 = -2.D0 * DOT_PRODUCT(xr_0, R0(:, 1))
+      s2 = 2.D0 * DOT_PRODUCT(xr_0, R0(:, 2))
+      psi_0 = s1 * s2 / 4.D0
       END FUNCTION
 C *************************************************************************** C
 C     Calculate the warping amplitude
 C *************************************************************************** C
-      PURE FUNCTION getWarpAmp(x_0, xr_0t, R, psi) result(w)
+      FUNCTION getWarpAmp(x_0, x_0_fit, t, psi) result(w)
       !
       ! Input and output
-      REAL(8), intent(in) :: x_0(3), xr_0t(3), R(3, 3), psi
+      REAL(8), intent(in) :: x_0(3), x_0_fit(3), t(3), psi
       REAL(8)             :: w
       ! Function start
-      w = (x_0(1)**2 + x_0(2)**2 + x_0(3)**2)
-     1 - 2.D0 * DOT_PRODUCT(x_0, MATMUL(R, xr_0t))
-     2 + (xr_0t(1)**2 + xr_0t(2)**2 + xr_0t(3)**2)
-      ! todo: should we take the positive or negative root?
-      w = SQRT(1.D0 / psi ** 2 * w)
+      w = 1.D0 / psi * DOT_PRODUCT(t, x_0 - x_0_fit)
       END FUNCTION
 C *************************************************************************** C
 C     Compute the linearized warping vector
@@ -428,12 +435,12 @@ C *************************************************************************** C
       REAL(8)               ::  RR_rs(3, 3), fact_23(3)
       REAL(8), ALLOCATABLE  ::  warp_1(:, :), warp_2(:, :), 
      1                          warp_21(:, :), warp_22(:, :), 
-     2                          warp_23(:, :), warp_3(:, :), RRmat(:, :)
+     2                          warp_23(:, :), warp_3(:, :), dRdX(:, :)
       REAL(8)               :: ZERO, TWO
       PARAMETER                (ZERO = 0.D0, TWO = 2.D0)
       ! Warping vectors
-      sz = SHAPE(G)
-      nn = sz(2) / 3
+      sz = SHAPE(G)  ! 3 * N
+      nn = sz(2) / 3  ! N
       ALLOCATE(warp_1(1, sz(2)))
       ALLOCATE(warp_2(1, sz(2)))
       ALLOCATE(warp_21(1, sz(2)))
@@ -441,17 +448,17 @@ C *************************************************************************** C
       ALLOCATE(warp_23(1, sz(2)))
       ALLOCATE(warp_3(1, sz(2)))
       ALLOCATE(w_lin(1, sz(2)))
-      ALLOCATE(RRmat(9, sz(2)))
+      ALLOCATE(dRdX(9, sz(2)))
       !
       warp_1(1, :) = ZERO
       warp_1(1, 1:3) = -TWO * x_0(:)
       ! Second term
       warp_21(1, :) = ZERO
       warp_21(1, 1:3) = MATMUL(xr_0t, R)
-      RRmat = MATMUL(-skewMat(R), G)      
+      dRdX = MATMUL(-skewMat(R), G)
       warp_22(1, :) = ZERO
       DO i = 1, sz(2)
-        RR_rs = vec2mat_9(RRmat(:, i))
+        RR_rs = vec2mat_9(dRdX(:, i))
         warp_22(1, i) = DOT_PRODUCT(x_0, MATMUL(RR_rs, xr_0t))
       END DO
       fact_23 = ONE / nn * MATMUL(R, x_0)
@@ -468,5 +475,28 @@ C *************************************************************************** C
         w_lin(1, i) = warp_1(1, i) + warp_2(1, i) + warp_3(1, i)
       END DO
       END FUNCTION
+C *************************************************************************** C
+C     Extract rotation vector from quaternion
+C *************************************************************************** C
+      PURE FUNCTION extractRotation(q) result(phi)
+      ! Returns the rotation vector extracted from the quaternion
+      ! From Abaqus Theory Guide 1.3.1
+      ! Input and output
+      REAL(8), intent(in) ::  q(4)
+      REAL(8)             ::  phi(3)
+      ! Internal
+      REAL(8)             :: q_mag, rot
+      REAL(8)             :: small
+      PARAMETER              (small = 1.D-14)
+      ! Function start
+      q_mag = SQRT(q(2) ** 2 + q(3) ** 2 + q(4) ** 2)
+      IF (q_mag .GT. small) THEN
+        rot = 2.D0 * ATAN2(q_mag, q(1))
+        phi = rot / q_mag * q(2:4)
+      ELSE
+        phi(:) = 0.D0
+      END IF
+      END FUNCTION
       
+C *************************************************************************** C
       END  ! END SUBROUTINE
