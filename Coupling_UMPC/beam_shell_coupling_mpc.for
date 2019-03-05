@@ -34,7 +34,7 @@ C *************************************************************************** C
       REAL(8), ALLOCATABLE  :: C_mat(:, :), D_mat(:, :), G_mat(:, :), 
      1                         Q_mat(:, :), 
      2                         X_shell(:, :), U_shell(:, :), 
-     3                         lin_warp(:), X_ref(:, :), psi_all(:)
+     3                         w_lin(:), X_ref(:, :), psi_all(:)
       ! For the rotation quaternion and computations
       REAL(8)               :: B_mat(QUATDIM, QUATDIM), 
      1                         beta(QUATDIM, QUATDIM)
@@ -54,7 +54,7 @@ C *************************************************************************** C
       ALLOCATE(G_mat(NDIM, NDIM * n_shell))
       ALLOCATE(Q_mat(NDIM, NDIM * n_shell))
       ALLOCATE(psi_all(n_shell))
-      ALLOCATE(lin_warp(NDIM * n_shell))
+      ALLOCATE(w_lin(NDIM * n_shell))
 C *************************************************************************** C
 C Routine definition
 C *************************************************************************** C      
@@ -105,8 +105,8 @@ C *************************************************************************** C
       w_amp = warp_amp(X_shell, X_shell + U_shell, u_cent, t_def, R_mat,
      1                 psi_all)
       ! Calculate the linearized warping
-!      lin_warp = getLinWarp(x_s1, x_s1_ref, u_cent, R_ref(:, 3), 
-!     1                      psi_all, R_mat, G_mat)
+      w_lin = lin_warp(X_shell + U_shell, R_ref(:, 3), psi_all, R_mat, 
+     1                 G_mat)
       
       ! Assign the A submatrix for the beam node and set active DOF
       FORALL(i = 1:7) A(i, i, 1) = ONE
@@ -125,7 +125,7 @@ C *************************************************************************** C
         A(5, 1:3, i) = -Q_mat(2, 3*i_sh-2:3*i_sh)
         A(6, 1:3, i) = -Q_mat(3, 3*i_sh-2:3*i_sh)
         ! Warping constraint
-        A(7, 1:3, i) = lin_warp(3*i_sh-2:3*i_sh) 
+        A(7, 1:3, i) = -w_lin(3*i_sh-2:3*i_sh) 
         ! Set the active DOF in the shell elements
         JDOF(1, i) = 1
         JDOF(2, i) = 2
@@ -428,27 +428,6 @@ C *************************************************************************** C
       O = getOrientation(Z)
       END FUNCTION
 C *************************************************************************** C
-C     Calculate the warping function at s = 0
-C *************************************************************************** C
-      PURE FUNCTION getWarpFun0(xr_0, R0) result(psi_0)
-      ! Returns the warping function evaluated at s = 0.
-      ! @ input xr_0: x at s = 0 in the reference configuration.
-      ! @ input R0: Orientation of the reference configuration.
-      ! @ returns psi_0: Warping function at s = 0.
-      ! Input and output
-      REAL(8), intent(in) :: xr_0(3), R0(3, 3)
-      REAL(8)             :: psi_0
-      ! Internal
-      REAL(8)             :: s1, s2
-      ! Function start
-      ! s1 and s2 are the 2x the length projected onto local x and y axes
-      ! The point is assumed to be at x = -b/2 and y = (h-t_f)/2
-      !
-      s1 = -2.D0 * DOT_PRODUCT(xr_0, R0(:, 1))
-      s2 = 2.D0 * DOT_PRODUCT(xr_0, R0(:, 2))
-      psi_0 = s1 * s2 / 4.D0
-      END FUNCTION
-C *************************************************************************** C
 C     Calculate the warping function for all nodes
 C *************************************************************************** C
       PURE FUNCTION warp_fun(C) result(psi)
@@ -471,36 +450,17 @@ C *************************************************************************** C
       DO i = 1, sz(2)
         IF (ABS(C(2, i) - s2 / TWO ) .LT. TOL) THEN
           ! Node is on the top flange
-          s = C(1, i)
+          s = C(1, i) + s1 / TWO
           psi(i) = s2 * (s1 - TWO * s) / FOUR
         ELSE IF (ABS(C(2, i) + s2 / TWO ) .LT. TOL) THEN
           ! Node is on the bottom flange
-          s = C(1, i)
+          s = C(1, i) + s1 / TWO
           psi(i) = -s2 * (s1 - TWO * s) / FOUR
         ELSE
           ! Node is on the web line
           psi(i) = 0.D0
         END IF
       END DO
-      END FUNCTION
-C *************************************************************************** C
-C     Calculate the warping amplitude
-C *************************************************************************** C
-      PURE FUNCTION getWarpAmp(x1, x1_ref, u_c, t, R, psi) result(w)
-      ! Returns the warping amplitude.
-      ! @ input x1: x at s = 0 in the deformed configuration
-      ! @ input x1_ref: x at s = 0 in the reference configuration
-      ! @ input u_c: Translation of the centroid
-      ! @ input t: Orientation of the normal to the cross-section
-      ! @ input R: Optimal rotation matrix
-      ! @ input psi: Warping function at s = 0
-      ! @ returns w: Warping amplitude
-      ! Input and output
-      REAL(8), intent(in) ::  x1(3), x1_ref(3), u_c(3), t(3), psi
-      REAL(8), intent(in) ::  R(3, 3)
-      REAL(8)             ::  w
-      ! Function start
-      w = 1.D0 / psi * DOT_PRODUCT(t, x1 - MATMUL(R, x1_ref + u_c))
       END FUNCTION
 C *************************************************************************** C
 C     Calculate the warping amplitude
@@ -536,7 +496,7 @@ C *************************************************************************** C
 C *************************************************************************** C
 C     Compute the linearized warping vector
 C *************************************************************************** C
-      PURE FUNCTION getLinWarp(x1, x1_ref, u_c, t0, psi, R, G) 
+      PURE FUNCTION lin_warp(X_def, t0, psi, R, G) 
      1              result(w_lin)
       ! Returns the linearized warping vector.
       ! @ input x1: x at s = 0 in the deformed configuration
@@ -549,12 +509,12 @@ C *************************************************************************** C
       ! @ input G: Instantaneous rotation matrix
       ! @ returns w_lin: Linearization of warping amplitude w.r.t X
       ! Input and output
-      REAL(8), intent(in)   ::  x1(3), x1_ref(3), u_c(3), t0(3), psi
-      REAL(8), intent(in)   ::  R(3, 3), G(:, :)
+      REAL(8), intent(in)   ::  X_def(:, :), t0(3), psi(:), R(3, 3) 
+      REAL(8), intent(in)   ::  G(:, :)
       REAL(8), ALLOCATABLE  ::  w_lin(:)
       ! Internal
-      INTEGER               ::  sz(2), i, j, num_nodes
-      REAL(8)               ::  dRdX_rs(3, 3)
+      INTEGER               ::  sz(2), i, j, num_nodes, num_psi_non_zero
+      REAL(8)               ::  dRdX_rs(3, 3), t(3)
       REAL(8), ALLOCATABLE  ::  dRdX(:, :)
       REAL(8)               ::  ZERO, ONE, TWO
       PARAMETER                 (ZERO = 0.D0, ONE = 1.D0, TWO = 2.D0)
@@ -564,21 +524,28 @@ C *************************************************************************** C
       num_nodes = sz(2) / 3
       ALLOCATE(w_lin(sz(2)))
       ALLOCATE(dRdX(9, sz(2)))
-      ! Calculate constants
+      ! Calculate the derivative of R
       dRdX = MATMUL(-skewMat(R), G)
       ! Assemble the linearized warping vector
+      t = MATMUL(R, t0)
+      w_lin(:) = ZERO
       DO i = 1, sz(2)
         dRdX_rs = vec2mat_9(dRdX(:, i))
-        w_lin(i) =    DOT_PRODUCT(-t0, MATMUL(dRdX_rs, x1))
-        j = MOD(i, 3)
-        IF (j .EQ. 0) THEN
-          j = 3
-        END IF
-        w_lin(i) = w_lin(i) + ONE / num_nodes * t0(j)
+        DO j = 1, num_nodes
+          IF (psi(j) .NE. ZERO) THEN
+            w_lin(i) = w_lin(i) 
+     1      + DOT_PRODUCT(t0, MATMUL(dRdX_rs, X_def(:, j))) / psi(j)
+          END IF
+        END DO
       END DO
-      w_lin(1:3) = w_lin(1:3) + MATMUL(R, t0)
-      w_lin = ONE / psi * w_lin
-      
+      num_psi_non_zero = 0
+      DO i = 1, num_nodes
+        IF (psi(i) .NE. ZERO) THEN
+          num_psi_non_zero = num_psi_non_zero + 1
+          w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) + t(:) / psi(i)
+        END IF
+      END DO
+      w_lin = w_lin / num_psi_non_zero
       END FUNCTION
 C *************************************************************************** C
 C     Extract rotation vector from quaternion
@@ -604,6 +571,5 @@ C *************************************************************************** C
         phi(:) = 0.D0
       END IF
       END FUNCTION
-      
 C *************************************************************************** C
       END  ! END SUBROUTINE
