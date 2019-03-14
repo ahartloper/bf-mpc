@@ -1,11 +1,11 @@
-      SUBROUTINE MPC(UE,A,JDOF,MDOF,N,JTYPE,X,U,UINIT,MAXDOF,
-     * LMPC,KSTEP,KINC,TIME,NT,NF,TEMP,FIELD,LTRAN,TRAN)
+      subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof,
+     * lmpc, kstep, kinc, time, nt, nf, temp, field, ltran, tran)
 C
-      !INCLUDE 'ABA_PARAM.INC'
+      !include 'aba_param.inc'
 C
-      DIMENSION UE(MDOF),A(MDOF,MDOF,N),JDOF(MDOF,N),X(6,N),
-     * U(MAXDOF,N),UINIT(MAXDOF,N),TIME(2),TEMP(NT,N),
-     * FIELD(NF,NT,N),LTRAN(N),TRAN(3,3,N)
+      dimension ue(mdof), a(mdof, mdof, n), jdof(mdof, n), x(6, n),
+     * u(maxdof, n), uinit(maxdof, n), time(2), temp(nt, n),
+     * field(nf, nt, n), ltran(n), tran(3, 3, n)
 C
 C *************************************************************************** C
 C Beam to shell coupling with warping
@@ -13,501 +13,488 @@ C A Hartloper, EPFL
 C *************************************************************************** C
       ! Internal variables
       ! Defines the spatial DOF and size of quaternions
-      INTEGER               :: NDIM, QUATDIM
-      PARAMETER                (NDIM = 3, QUATDIM = 4)
+      integer               :: ndim, quatdim
+      parameter                (ndim = 3, quatdim = 4)
       ! Number of shell nodes
-      INTEGER               :: n_shell
-      REAL(8)               :: n_reciprocal
-      ! Loop counter
-      INTEGER               :: i, i_sh
+      integer               :: n_shell
+      real(8)               :: n_reciprocal
+      ! Loop counters
+      integer               :: i, i_sh
       ! Warping amplitude
-      REAL(8)               :: w_amp
-      ! Centroids (deformed and reference)
-      REAL(8)               :: XC(NDIM), XC0(NDIM), u_cent(NDIM)
-      ! First shell node (deformed and translated reference)
-      REAL(8)               :: x_s1(NDIM), x_s1_ref(NDIM)
+      real(8)               :: w_amp
+      ! Centroids (deformed and initial)
+      real(8)               :: xc(ndim), xc0(ndim), u_cent(ndim)
       ! Rotation matrices (to get deformed, reference)
-      REAL(8)               :: R_mat(NDIM, NDIM), R_ref(NDIM, NDIM)
+      real(8)               :: r_mat(ndim, ndim), r_ref(ndim, ndim)
       ! Orientation normal to beam plane
-      REAL(8)               :: t_def(NDIM), Q_temp(3, 3)
+      real(8)               :: t_def(ndim)
       ! Arrays that depend on the number of nodes
-      REAL(8), ALLOCATABLE  :: C_mat(:, :), D_mat(:, :), G_mat(:, :), 
-     1                         Q_mat(:, :), X_shell_def(:, :),
-     2                         X_shell(:, :), U_shell(:, :), 
+      real(8), allocatable  :: c_mat(:, :), d_mat(:, :), g_mat(:, :), 
+     1                         q_mat(:, :), x_shell_def(:, :),
+     2                         x_shell(:, :), u_shell(:, :), 
      3                         w_lin(:), psi_all(:)
       ! For the rotation quaternion and computations
-      REAL(8)               :: B_mat(QUATDIM, QUATDIM), 
-     1                         beta(QUATDIM, QUATDIM)
-      REAL(8)               :: quat(QUATDIM), quat_R(QUATDIM)
-      REAL(8)               :: lambda
-      REAL(8)               :: lam_q(QUATDIM+1)
+      real(8)               :: b_mat(quatdim, quatdim), 
+     1                         beta(quatdim, quatdim)
+      real(8)               :: op_quat(quatdim)
+      real(8)               :: lambda
+      real(8)               :: lam_q(quatdim+1)
       ! Numerical parameters
-      REAL(8)               :: ONE, TWO, ZERO
-      PARAMETER                (ONE=1.0D0, TWO=2.0D0, ZERO=0.D0)
+      real(8)               :: one, two, zero
+      parameter                (one=1.0d0, two=2.0d0, zero=0.d0)
       ! Allocate variable size arrays
-      n_shell = N - 1
-      ALLOCATE(X_shell(NDIM, n_shell))
-      ALLOCATE(U_shell(NDIM, n_shell))
-      ALLOCATE(X_shell_def(NDIM, n_shell))
-      ALLOCATE(C_mat(NDIM, n_shell))
-      ALLOCATE(D_mat(NDIM, n_shell))
-      ALLOCATE(G_mat(NDIM, NDIM * n_shell))
-      ALLOCATE(Q_mat(NDIM, NDIM * n_shell))
-      ALLOCATE(psi_all(n_shell))
-      ALLOCATE(w_lin(NDIM * n_shell))
+      n_shell = n - 1
+      allocate(x_shell(ndim, n_shell))
+      allocate(u_shell(ndim, n_shell))
+      allocate(x_shell_def(ndim, n_shell))
+      allocate(c_mat(ndim, n_shell))
+      allocate(d_mat(ndim, n_shell))
+      allocate(g_mat(ndim, ndim * n_shell))
+      allocate(q_mat(ndim, ndim * n_shell))
+      allocate(psi_all(n_shell))
+      allocate(w_lin(ndim * n_shell))
 C *************************************************************************** C
-C Routine definition
+C Subroutine definition
 C *************************************************************************** C      
       ! Calculate the centroid locations
       ! The first node is the beam node, the shell nodes follow
-      X_shell = X(1:NDIM, 2:N)
-      U_shell = U(1:NDIM, 2:N)
-      X_shell_def = X_shell + U_shell
-      XC0(:) = ZERO
-      XC(:) = ZERO
-      DO i = 1, n_shell
-        XC0(:) = XC0(:) + X_shell(:, i)
-        XC(:) = XC(:) + X_shell_def(:, i)
-      END DO
-      n_reciprocal = ONE / n_shell
-      XC0 = XC0 * n_reciprocal
-      XC = XC * n_reciprocal
-      u_cent = XC - XC0
+      x_shell = x(:, 2:n)
+      u_shell = u(:, 2:n)
+      x_shell_def = x_shell + u_shell
+      xc0(:) = zero
+      xc(:) = zero
+      do i = 1, n_shell
+        xc0(:) = xc0(:) + x_shell(:, i)
+        xc(:) = xc(:) + x_shell_def(:, i)
+      end do
+      n_reciprocal = one / n_shell
+      xc0 = xc0 * n_reciprocal
+      xc = xc * n_reciprocal
+      u_cent = xc - xc0
       
       ! Compute the optimal rotation quaternion
-      B_mat(:, :) = ZERO
-      DO i = 1, n_shell
-        C_mat(:, i) = X_shell(:, i) - XC0
-        D_mat(:, i) = X_shell_def(:, i) - XC
-        beta = left_quat(ZERO,D_mat(:, i))- right_quat(ZERO,C_mat(:, i))
-        B_mat = B_mat + MATMUL(TRANSPOSE(beta), beta)
-      END DO
-      lam_q = calc_opquat(B_mat)
+      b_mat(:, :) = zero
+      do i = 1, n_shell
+        c_mat(:, i) = x_shell(:, i) - xc0
+        d_mat(:, i) = x_shell_def(:, i) - xc
+        beta = left_quat(zero,d_mat(:, i))- right_quat(zero,c_mat(:, i))
+        b_mat = b_mat + matmul(transpose(beta), beta)
+      end do
+      lam_q = calc_opquat(b_mat)
       lambda = lam_q(1)
-      quat = lam_q(2:5)
+      op_quat = lam_q(2:5)
       ! Make the first entry always positive
-      quat = SIGN(ONE, quat(1)) * quat  
+      op_quat = sign(one, op_quat(1)) * op_quat  
       
       ! Compute the linearized rotation matrix
-      R_mat = rot_mat(quat)
-      G_mat = calc_g(quat, B_mat, C_mat, lambda, R_mat)
-      Q_mat = calc_q(quat, G_mat)
+      r_mat = rot_mat(op_quat)
+      g_mat = calc_g(op_quat, b_mat, c_mat, lambda, r_mat)
+      q_mat = calc_q(op_quat, g_mat)
       
       ! Calculate the warping amplitude
-      R_ref = ini_config(C_mat)
-      psi_all = warp_fun(C_mat, R_ref)
-      t_def(:) = MATMUL(R_mat, R_ref(:, 3))
-      w_amp = warp_amp(X_shell, X_shell_def, u_cent, t_def, R_mat,
+      r_ref = ini_config(c_mat)
+      psi_all = warp_fun(c_mat, r_ref)
+      t_def(:) = matmul(r_mat, r_ref(:, 3))
+      w_amp = warp_amp(x_shell, x_shell_def, u_cent, t_def, r_mat,
      1                 psi_all)
       ! Calculate the linearized warping
-      w_lin = calc_w(X_shell_def, R_ref(:, 3), psi_all, R_mat, G_mat)
+      w_lin = calc_w(x_shell_def, r_ref(:, 3), psi_all, r_mat, g_mat)
       
       ! Assign the A submatrix for the beam node and set active DOF
-      FORALL(i = 1:7) A(i, i, 1) = ONE
-      FORALL(i = 1:7) JDOF(i, 1) = i
+      forall(i = 1:7) a(i, i, 1) = one
+      forall(i = 1:7) jdof(i, 1) = i
       
       ! Assign the A submatrices for the shell nodes
-      DO i = 2, N
+      do i = 2, n
         ! Index corresponding to the shell nodes
         i_sh = i - 1
         ! Displacement constraints
-        A(1, 1, i) = -n_reciprocal
-        A(2, 2, i) = -n_reciprocal
-        A(3, 3, i) = -n_reciprocal
+        a(1, 1, i) = -n_reciprocal
+        a(2, 2, i) = -n_reciprocal
+        a(3, 3, i) = -n_reciprocal
         ! Rotation constraints
-        A(4, 1:3, i) = -Q_mat(1, 3*i_sh-2:3*i_sh)
-        A(5, 1:3, i) = -Q_mat(2, 3*i_sh-2:3*i_sh)
-        A(6, 1:3, i) = -Q_mat(3, 3*i_sh-2:3*i_sh)
+        a(4, 1:3, i) = -q_mat(1, 3*i_sh-2:3*i_sh)
+        a(5, 1:3, i) = -q_mat(2, 3*i_sh-2:3*i_sh)
+        a(6, 1:3, i) = -q_mat(3, 3*i_sh-2:3*i_sh)
         ! Warping constraint
-        A(7, 1:3, i) = w_lin(3*i_sh-2:3*i_sh) 
+        a(7, 1:3, i) = w_lin(3*i_sh-2:3*i_sh) 
         ! Set the active DOF in the shell elements
-        JDOF(1, i) = 1
-        JDOF(2, i) = 2
-        JDOF(3, i) = 3
-      END DO
+        jdof(1, i) = 1
+        jdof(2, i) = 2
+        jdof(3, i) = 3
+      end do
             
       ! Update the node DOF exactly
-      UE(1:3) = u_cent
-      UE(4:6) = extract_rotation(quat)
-      UE(7) = w_amp
-      RETURN
+      ue(1:3) = u_cent
+      ue(4:6) = extract_rotation(op_quat)
+      ue(7) = w_amp
+      return
       
-      CONTAINS
+      contains
 C *************************************************************************** C
 C     Skew symmetric matrix from vector
 C *************************************************************************** C
-      PURE FUNCTION skew_sym(v) result(Vss)
       ! Returns the 3x3 skew symmetric matrix from axial vector v
       ! @ input v: Axial vector of length 3
-      ! @ returns Vss: 3x3 skew symmetric matrix
-      REAL(8), intent(in) :: v(3)
-      REAL(8)             :: Vss(3, 3)
+      ! @ returns vss: 3x3 skew symmetric matrix
+      pure function skew_sym(v) result(vss)
+      real(8), intent(in) :: v(3)
+      real(8)             :: vss(3, 3)
       ! Specify the columns of the skew_symmetric matrix (transpose of the rows)
-      Vss(:, 1) = [ 0.D0, v(3), -v(2) ]
-      Vss(:, 2) = [ -v(3), 0.D0, v(1) ]
-      Vss(:, 3) = [ v(2), -v(1), 0.D0 ]
-      END FUNCTION
+      vss(:, 1) = [ 0.d0, v(3), -v(2) ]
+      vss(:, 2) = [ -v(3), 0.d0, v(1) ]
+      vss(:, 3) = [ v(2), -v(1), 0.d0 ]
+      end function
 C *************************************************************************** C
 C     Left quaternion representation from 3 element vector
 C *************************************************************************** C
       ! Returns the 4x4 left-side matrix representing {v0, v}
       ! @ input v0: Real part of rotation quaternion
       ! @ input v: Imaginary part of rotation quaternion, length 3
-      ! @ return Ql: Matrix representing left-hand quaternion multiplication
-      PURE FUNCTION left_quat(v0, v) result(Ql)
-      REAL(8), intent(in) :: v0
-      REAL(8), intent(in) :: v(3)
-      REAL(8)             :: Ql(4, 4)
-      INTEGER             :: i
-      !
-      Ql(:, 1) = [ v0, v(:) ]
-      Ql(1, 2:4) = -v(:)
-      Ql(2:4, 2:4) = skew_sym(v)
-      FORALL(i = 1:3) Ql(1 + i, 1 + i) = Ql(1 + i, 1 + i) + v0
-      END FUNCTION
+      ! @ return ql: Matrix representing left-hand quaternion multiplication
+      pure function left_quat(v0, v) result(ql)
+      real(8), intent(in) :: v0
+      real(8), intent(in) :: v(3)
+      real(8)             :: ql(4, 4)
+      integer             :: i
+      ! 
+      ql(:, 1) = [ v0, v(:) ]
+      ql(1, 2:4) = -v(:)
+      ql(2:4, 2:4) = skew_sym(v)
+      forall(i = 1:3) ql(1 + i, 1 + i) = ql(1 + i, 1 + i) + v0
+      end function
 C *************************************************************************** C
 C     Right quaternion representation from 3 element vector
 C *************************************************************************** C
       ! Returns the 4x4 right-side matrix representing {v0, v}
       ! @ input v0: Real part of rotation quaternion
       ! @ input v: Imaginary part of rotation quaternion, length 3
-      ! @ return Qr: Matrix representing right-hand quaternion multiplication
-      PURE FUNCTION right_quat(v0, v) result(Qr)
-      REAL(8), intent(in) :: v0
-      REAL(8), intent(in) :: v(3)
-      REAL(8)             :: Qr(4, 4)
-      INTEGER             :: i
+      ! @ return qr: Matrix representing right-hand quaternion multiplication
+      pure function right_quat(v0, v) result(qr)
+      real(8), intent(in) :: v0
+      real(8), intent(in) :: v(3)
+      real(8)             :: qr(4, 4)
+      integer             :: i
       !
-      Qr(:, 1) = [ v0, v(:) ]
-      Qr(1, 2:4) = -v(:)
-      Qr(2:4, 2:4) = -skew_sym(v)   
-      FORALL(i = 1:3) Qr(1 + i, 1 + i) = Qr(1 + i, 1 + i) + v0   
-      END FUNCTION
+      qr(:, 1) = [ v0, v(:) ]
+      qr(1, 2:4) = -v(:)
+      qr(2:4, 2:4) = -skew_sym(v)   
+      forall(i = 1:3) qr(1 + i, 1 + i) = qr(1 + i, 1 + i) + v0   
+      end function
 C *************************************************************************** C
 C     Rotation matrix from quaternion
 C *************************************************************************** C
       ! Returns the 3x3 matrix representing rotation quaternion q
       ! @ input q: Length 4 rotation quaternion
-      ! @ returns R: 3x3 rotation matrix
-      PURE FUNCTION rot_mat(q) result(R)
-      REAL(8), intent(in) :: q(4)
-      REAL(8)             :: R(3, 3)
+      ! @ returns r: 3x3 rotation matrix
+      pure function rot_mat(q) result(r)
+      real(8), intent(in) :: q(4)
+      real(8)             :: r(3, 3)
       ! Specify the columns
-      R(:, 1) = [ ONE - TWO * (q(3) ** 2 + q(4) ** 2), 
-     1            TWO * (q(2) * q(3) + q(1) * q(4)), 
-     2            TWO * (q(2) * q(4) - q(1) * q(3)) ]
-      R(:, 2) = [ TWO * (q(2) * q(3) - q(1) * q(4)),
-     1            ONE - TWO * (q(2) ** 2 + q(4) ** 2),
-     2            TWO * (q(3) * q(4) + q(1) * q(2)) ]
-      R(:, 3) = [ TWO * (q(2) * q(4) + q(1) * q(3)),
-     1            TWO * (q(3) * q(4) - q(1) * q(2)),
-     2            ONE - TWO * (q(2) ** 2 + q(3) ** 2) ]
-      END FUNCTION
+      r(:, 1) = [ one - two * (q(3) ** 2 + q(4) ** 2), 
+     1            two * (q(2) * q(3) + q(1) * q(4)), 
+     2            two * (q(2) * q(4) - q(1) * q(3)) ]
+      r(:, 2) = [ two * (q(2) * q(3) - q(1) * q(4)),
+     1            one - two * (q(2) ** 2 + q(4) ** 2),
+     2            two * (q(3) * q(4) + q(1) * q(2)) ]
+      r(:, 3) = [ two * (q(2) * q(4) + q(1) * q(3)),
+     1            two * (q(3) * q(4) - q(1) * q(2)),
+     2            one - two * (q(2) ** 2 + q(3) ** 2) ]
+      end function
 C *************************************************************************** C
 C     Stack of skew symmetric matrix from columns of matrix
 C *************************************************************************** C
-      PURE FUNCTION skew_mat(R) result(RR)
       ! Returns the 9x3 skew symmetric matrix from the columns of R
-      ! @ input R: 3x3 matrix
-      ! @ outputs RR: Vertical stack of the skew symmetric matrices formed from
+      ! @ input r: 3x3 matrix
+      ! @ outputs rr: Vertical stack of the skew symmetric matrices formed from
       !               the 3 columns of R
-      REAL(8), intent(in) :: R(3, 3)
-      REAL(8)             :: RR(9, 3)
+      pure function skew_mat(r) result(rr)
+      real(8), intent(in) :: r(3, 3)
+      real(8)             :: rr(9, 3)
       !
-      RR(1:3, :) = skew_sym(R(:, 1))
-      RR(4:6, :) = skew_sym(R(:, 2))
-      RR(7:9, :) = skew_sym(R(:, 3))
-      END FUNCTION
+      rr(1:3, :) = skew_sym(r(:, 1))
+      rr(4:6, :) = skew_sym(r(:, 2))
+      rr(7:9, :) = skew_sym(r(:, 3))
+      end function
 C *************************************************************************** C
 C     Create a 3x3 matrix out of vector of length 9
 C *************************************************************************** C
-      PURE FUNCTION vec2mat_9(v) result(R)
       ! Returns the 3x3 matrix from the vector v
       ! @ input v: Vector of lenght 9
-      ! @ returns R: 3x3 matrix
-      REAL(8), intent(in) :: v(9)
-      REAL(8)             :: R(3, 3)
+      ! @ returns r: 3x3 matrix
+      pure function vec2mat_9(v) result(r)
+      real(8), intent(in) :: v(9)
+      real(8)             :: r(3, 3)
       !
-      R(:, 1) = [v(1), v(4), v(7)]
-      R(:, 2) = [v(2), v(5), v(8)]
-      R(:, 3) = [v(3), v(6), v(9)]
-      END FUNCTION
+      r(:, 1) = [v(1), v(4), v(7)]
+      r(:, 2) = [v(2), v(5), v(8)]
+      r(:, 3) = [v(3), v(6), v(9)]
+      end function
 C *************************************************************************** C
 C     Compute optimal rotation quaternion
 C *************************************************************************** C
-      FUNCTION calc_opquat(B) result(lambda_and_q)
       ! Returns the optimal rotation and associated eigenvalue
-      ! @ input B: \mathcal{B} matrix from Mostafa and Sivaselvan
+      ! @ input b: \mathcal{B} matrix from Mostafa and Sivaselvan
       ! @ returns lambda_and_q: First entry is the minimum eigenvalue,
       !                         following entries are the associated eigenvector
-      REAL(8), intent(in) ::  B(4, 4)
-      REAL(8)             ::  BE(4, 4)
-      REAL(8)             ::  lambda_and_q(5)
-      ! For LAPACK
-      INTEGER             ::  NE, NSELECT
-      PARAMETER               (NE = 4, NSELECT = 1)
-      INTEGER             ::  LDA, LDZ
-      PARAMETER               (LDA = NE, LDZ = NE)
-      INTEGER             ::  INFO, LWORK, LIWORK, IL, IU, M
-      REAL(8)             ::  ABSTOL, VL, VU
-      INTEGER :: LWMAX
-      PARAMETER(LWMAX = 1000)
-      INTEGER             ::  ISUPPZ(NE), IWORK(LWMAX)
-      REAL(8)             ::  AE(LDA, NE), W(NE), Z(LDZ, NSELECT), 
-     1                        WORK(LWMAX)
-      EXTERNAL DSYEVR
+      function calc_opquat(b) result(lambda_and_q)
+      real(8), intent(in) ::  b(4, 4)
+      real(8)             ::  be(4, 4)
+      real(8)             ::  lambda_and_q(5)
+      ! For lapack
+      integer             ::  ne, nselect
+      parameter               (ne = 4, nselect = 1)
+      integer             ::  lda, ldz
+      parameter               (lda = ne, ldz = ne)
+      integer             ::  info, lwork, liwork, il, iu, m
+      real(8)             ::  abstol, vl, vu
+      integer :: lwmax
+      parameter(lwmax = 1000)
+      integer             ::  isuppz(ne), iwork(lwmax)
+      real(8)             ::  ae(lda, ne), w(ne), z(ldz, nselect), 
+     1                        work(lwmax)
+      external dsyevr
       !
-      ABSTOL = -1.0
-      IL = 1
-      IU = NSELECT
-      ! LWORK and LIWORK are set based on the query to the optimal 
+      abstol = -1.0
+      il = 1
+      iu = nselect
+      ! lwork and liwork are set based on the query to the optimal 
       ! workspace during testing
-      LWORK = 104
-      LIWORK = 40
-      BE = B  ! We need B for later, so don't overwrite
-      CALL DSYEVR('Vectors', 'Indices', 'Upper', NE, BE, LDA, VL, VU,IL,
-     1            IU, ABSTOL, M, W, Z, LDZ, ISUPPZ, WORK, LWORK, IWORK,
-     2            LIWORK, INFO) 
-      lambda_and_q(1) = W(1)
-      lambda_and_q(2:5) = Z(:, 1)
-      END FUNCTION
+      lwork = 104
+      liwork = 40
+      ! We need B for later, so don't overwrite
+      be = b  
+      call dsyevr('Vectors', 'Indices', 'Upper', ne, be, lda, vl, vu,il,
+     1            iu, abstol, m, w, z, ldz, isuppz, work, lwork, iwork,
+     2            liwork, info) 
+      lambda_and_q(1) = w(1)
+      lambda_and_q(2:5) = z(:, 1)
+      end function
 C *************************************************************************** C
 C     Compute G matrix
 C *************************************************************************** C
-      FUNCTION calc_g(q, B, C, lam, R) result(G)
       ! Returns the instantaneous rotation matrix from Mostafa and Sivaselvan
       ! @ input q: Optimal rotation quaternion
-      ! @ input B: \matcal{B} matrix from Mostafa and Sivaselvan
-      ! @ input C: C matrix from Mostafa and Sivaselvan
+      ! @ input b: \matcal{B} matrix from Mostafa and Sivaselvan
+      ! @ input c: C matrix from Mostafa and Sivaselvan
       ! @ input lam: Minimum eigenvalue of B matrix
-      ! @ input R: Rotation matrix of optimal rotation quaternion
-      ! @ returns G: Instantaneous rotation matrix
+      ! @ input r: Rotation matrix of optimal rotation quaternion
+      ! @ returns g: Instantaneous rotation matrix
+      function calc_g(q, b, c, lam, r) result(g)
       ! Input and output
-      REAL(8), intent(in)   ::  q(4), B(:, :), C(:, :), R(3, 3)
-      REAL(8), intent(in)   ::  lam
-      REAL(8), ALLOCATABLE  ::  G(:, :)
+      real(8), intent(in)   ::  q(4), b(:, :), c(:, :), r(3, 3)
+      real(8), intent(in)   ::  lam
+      real(8), allocatable  ::  g(:, :)
       ! Internal
-      INTEGER               ::  sz(2)
-      REAL(8)               ::  qrr(4, 4), qrr_3(4, 3), Xinv(3, 3), 
-     1                          ID4(4, 4)
-      REAL(8), ALLOCATABLE  ::  A_temp(:, :)
+      integer               ::  sz(2)
+      real(8)               ::  qrr(4, 4), qrr_3(4, 3), xinv(3, 3), 
+     1                          id4(4, 4)
+      real(8), allocatable  ::  a_temp(:, :)
       ! LAPACK
-      INTEGER               :: N_LS, NRHS
-      PARAMETER                (N_LS = 3)
-      INTEGER               :: LDA_LS, LDB_LS
-      PARAMETER                (LDA_LS = 3, LDB_LS = 3)
-      INTEGER               :: INFO
-      INTEGER               :: IPIV(N_LS)
-      EXTERNAL DGESV
+      integer               :: n_ls, nrhs
+      parameter                (n_ls = 3)
+      integer               :: lda_ls, ldb_ls
+      parameter                (lda_ls = 3, ldb_ls = 3)
+      integer               :: info
+      integer               :: ipiv(n_ls)
+      external dgesv
       ! Assign array sizes
-      sz = SHAPE(C)
-      ALLOCATE(A_temp(3, sz(2)))
-      ALLOCATE(G(3, 3 * sz(2)))
-      NRHS = 3 * sz(2)
+      sz = shape(c)
+      allocate(a_temp(3, sz(2)))
+      allocate(g(3, 3 * sz(2)))
+      nrhs = 3 * sz(2)
       ! Function start
       ! Calculate I_4x4
-      ID4(:, :) = 0.D0
-      FORALL(i = 1:4) ID4(i, i) = 1.D0
+      id4(:, :) = 0.d0
+      forall(i = 1:4) id4(i, i) = 1.d0
       qrr = right_quat(q(1), q(2:4))
       qrr_3 = qrr(:, 2:4)
-      Xinv = MATMUL(MATMUL(TRANSPOSE(qrr_3), (B - lam * ID4)), qrr_3)
-      A_temp = MATMUL(R, C)
-      DO i = 1, sz(2)
-        G(:, 3*i-2:3*i) = TRANSPOSE(-skew_sym(A_temp(:, i)))
-      END DO
-      CALL DGESV( N_LS, NRHS, Xinv, LDA_LS, IPIV, G, LDB_LS, INFO )
-      G = 4.D0 * G
+      xinv = matmul(matmul(transpose(qrr_3), (b - lam * id4)), qrr_3)
+      a_temp = matmul(r, c)
+      do i = 1, sz(2)
+        g(:, 3*i-2:3*i) = transpose(-skew_sym(a_temp(:, i)))
+      end do
+      call dgesv( n_ls, nrhs, xinv, lda_ls, ipiv, g, ldb_ls, info )
+      g = 4.d0 * g
       
-      END FUNCTION
+      end function
 C *************************************************************************** C
 C     Compute linearized rotation matrix
 C *************************************************************************** C
-      PURE FUNCTION calc_q(q, G) result(QQ)
       ! Returns the linearization of the optimal rotation matrix
       ! @ input q: Optimal rotation quaternion
-      ! @ input G: Instantaneous rotation matrix
-      ! @ returns QQ: Linearization of rotation matrix R
+      ! @ input g: Instantaneous rotation matrix
+      ! @ returns qq: Linearization of rotation matrix R
+      pure function calc_q(q, g) result(qq)
       ! Input and output
-      REAL(8), intent(in)   ::  q(4), G(:, :)
-      REAL(8), ALLOCATABLE  ::  QQ(:, :)
+      real(8), intent(in)   ::  q(4), g(:, :)
+      real(8), allocatable  ::  qq(:, :)
       ! Internal
-      INTEGER               ::  sz(2)
-      REAL(8)               ::  qrr(4, 4), qrr_3(4, 3)      
+      integer               ::  sz(2)
+      real(8)               ::  qrr(4, 4), qrr_3(4, 3)      
       ! Assign array sizes
-      sz = SHAPE(G)
-      ALLOCATE(QQ(3, sz(2)))
+      sz = shape(g)
+      allocate(qq(3, sz(2)))
       ! Function start
       ! Compute the linearized rotation matrix
-      qrr = right_quat(q(1), q(2:QUATDIM))
-      qrr_3 = qrr(:, 2:QUATDIM)
-      QQ = MATMUL(qrr_3(2:QUATDIM, :), G)
+      qrr = right_quat(q(1), q(2:quatdim))
+      qrr_3 = qrr(:, 2:quatdim)
+      qq = matmul(qrr_3(2:quatdim, :), g)
       
-      END FUNCTION
+      end function
 C *************************************************************************** C
 C     Order reference configuration
 C *************************************************************************** C
-      PURE FUNCTION order_ini(O) result(O2)
-      ! Orders O to have the orientation x, y, z as the columns of O2
-      ! @ input O: Un-ordered reference configuration
-      ! @ returns O2: Ordered reference configuration such that the column of
+      ! Orders o to have the orientation x, y, z as the columns of o2
+      ! @ input o: Un-ordered reference configuration
+      ! @ returns o2: Ordered reference configuration such that the column of
       !               O2 [x, y, z] are a right-handed coordinate system.
-      REAL(8), intent(in) :: O(3, 3)
-      REAL(8)             :: O2(3, 3), xo(3), yo(3), zo(3), cross_vec(3)
-      REAL(8)             :: test
+      pure function order_ini(o) result(o2)
+      real(8), intent(in) :: o(3, 3)
+      real(8)             :: o2(3, 3), xo(3), yo(3), zo(3), cross_vec(3)
+      real(8)             :: test
       ! z is the min eigenvalue, y is the greatest eigenvalue, x is the other
-      zo = O(:, 1)
-      yo = O(:, 3)
-      xo = O(:, 2)
+      zo = o(:, 1)
+      yo = o(:, 3)
+      xo = o(:, 2)
       ! Test to see if right-handed system
       cross_vec(1) = yo(2) * zo(3) - yo(3) * zo(2)
       cross_vec(2) = -(yo(1) * zo(3) - yo(3) * zo(1))
       cross_vec(3) = yo(1) * zo(2) - yo(2) * zo(1)
-      test = DOT_PRODUCT(xo, cross_vec)
-      IF (test .GT. 0) THEN
+      test = dot_product(xo, cross_vec)
+      if (test .gt. 0) then
         ! Correct assumption, right hand system
-        O2(:, 1) = xo
-        O2(:, 2) = yo
-        O2(:, 3) = zo
-      ELSE
+        o2(:, 1) = xo
+        o2(:, 2) = yo
+        o2(:, 3) = zo
+      else
         ! Reverse the sense of z to make it right-handed
-        O2(:, 1) = xo
-        O2(:, 2) = yo
-        O2(:, 3) = -zo
-      END IF
-      END FUNCTION
-C *************************************************************************** C
-C     Compute cross-product
-C *************************************************************************** C
-      PURE FUNCTION cross_prod(a, b) result(c)
-      REAL(8), intent(in) :: a(3), b(3)
-      REAL(8)             :: c(3)
-      !
-      c(1) = a(2) * b(3) - a(3) * b(2)
-      c(2) = -(a(1) * b(3) - a(3) * b(1))
-      c(3) = a(1) * b(2) - a(2) * b(1)
-      END FUNCTION
+        o2(:, 1) = xo
+        o2(:, 2) = yo
+        o2(:, 3) = -zo
+      end if
+      end function
 C *************************************************************************** C
 C     Compute reference configuration
 C *************************************************************************** C
       ! Returns the right-hand ordered reference configuration of ref_pts.
       ! @ input ref_pts: x, y, z coordinates of each point
-      ! @ returns O: Orientation of the reference configuration that is a 
+      ! @ returns o: Orientation of the reference configuration that is a 
       !              valid right-handed coordinate system.
-      FUNCTION ini_config(ref_pts) result(O)
+      function ini_config(ref_pts) result(o)
       !
-      REAL(8), intent(in) :: ref_pts(:, :)
-      REAL(8)             :: O(3, 3)
-      INTEGER :: NE, NSELECT, mat_shape(2)
-      PARAMETER(NE = 3, NSELECT = 3)
-      INTEGER :: LDA, LDZ
-      PARAMETER(LDA = NE, LDZ = NE)
-      INTEGER :: INFO, LWORK, LIWORK, IL, IU, M
-      DOUBLE PRECISION :: ABSTOL, VL, VU
-      INTEGER :: LWMAX
-      PARAMETER(LWMAX = 1000)
-      INTEGER :: ISUPPZ(NE), IWORK(LWMAX)
-      DOUBLE PRECISION :: AE(LDA, NE), W(NE), Z(LDZ, NSELECT), 
-     1 WORK(LWMAX)
-      EXTERNAL DSYEVR
+      real(8), intent(in) :: ref_pts(:, :)
+      real(8)             :: o(3, 3)
+      integer :: ne, nselect, mat_shape(2)
+      parameter(ne = 3, nselect = 3)
+      integer :: lda, ldz
+      parameter(lda = ne, ldz = ne)
+      integer :: info, lwork, liwork, il, iu, m
+      double precision :: abstol, vl, vu
+      integer :: lwmax
+      parameter(lwmax = 1000)
+      integer :: isuppz(ne), iwork(lwmax)
+      double precision :: ae(lda, ne), w(ne), z(ldz, nselect), 
+     1 work(lwmax)
+      external dsyevr
       !
-      mat_shape = SHAPE(ref_pts)
-      AE(:, :) = ZERO
-      DO i = 1, mat_shape(2)
-        AE = AE 
-     1  + SPREAD(ref_pts(:, i), dim=2, ncopies=3) *
-     2    SPREAD(ref_pts(:, i), dim=1, ncopies=3)
-      END DO
+      mat_shape = shape(ref_pts)
+      ae(:, :) = zero
+      ! The spread is used to compute the outer product of two vectors
+      do i = 1, mat_shape(2)
+        ae = ae 
+     1  + spread(ref_pts(:, i), dim=2, ncopies=3) *
+     2    spread(ref_pts(:, i), dim=1, ncopies=3)
+      end do
       !
-      ABSTOL = -1.0
-      IL = 1
-      IU = NSELECT
-      ! LWORK and LIWORK are set based on the query to the optimal 
+      abstol = -1.0
+      il = 1
+      iu = nselect
+      ! lwork and liwork are set based on the query to the optimal 
       ! workspace during testing
-      LWORK = 104
-      LIWORK = 40
-      CALL DSYEVR('Vectors', 'A', 'Upper', NE, AE, LDA, VL, VU, IL,
-     1            IU, ABSTOL, M, W, Z, LDZ, ISUPPZ, WORK, LWORK, IWORK,
-     2            LIWORK, INFO) 
+      lwork = 104
+      liwork = 40
+      call dsyevr('Vectors', 'A', 'Upper', ne, ae, lda, vl, vu, il,
+     1            iu, abstol, m, w, z, ldz, isuppz, work, lwork, iwork,
+     2            liwork, info) 
       ! The eigenvalues are returned in asscending order
-      O = order_ini(Z)
-      END FUNCTION
+      o = order_ini(z)
+      end function
 C *************************************************************************** C
 C     Calculate the warping function for all nodes
 C *************************************************************************** C
-      PURE FUNCTION warp_fun(C, R0) result(psi)
       ! Returns the warping function evaluated at each node.
-      ! @ input C: Location of nodes in reference config. relative to centroid.
+      ! @ input c: Location of nodes in reference config. relative to centroid.
       ! @ returns psi: Warping function each node.
+      pure function warp_fun(c, r0) result(psi)
       ! Input and output
-      REAL(8), intent(in)   :: C(:, :), R0(3, 3)
-      REAL(8), ALLOCATABLE  :: psi(:), C2(:, :)
+      real(8), intent(in)   :: c(:, :), r0(3, 3)
+      real(8), allocatable  :: psi(:), c2(:, :)
       ! Internal
-      REAL(8)             :: s, s1, s2, TWO, FOUR, TOL
-      PARAMETER              (TWO = 2.D0, FOUR = 4.D0, TOL = 1.D-8)
-      INTEGER             :: i, sz(2)
+      real(8)             :: s, s1, s2, two, four, tol
+      parameter              (two = 2.d0, four = 4.d0, tol = 1.d-8)
+      integer             :: i, sz(2)
       ! Allocate array
       ! sz(2) = N, the number of shell nodes
-      sz = SHAPE(C)
-      ALLOCATE(psi(sz(2)))
-      ALLOCATE(C2(3, sz(2)))
+      sz = shape(c)
+      allocate(psi(sz(2)))
+      allocate(c2(3, sz(2)))
       ! Rotate from the initial config to the reference config
-      DO i = 1, sz(2)
-        C2(:, i) = MATMUL(TRANSPOSE(R0), C(:, i))
-      END DO
+      do i = 1, sz(2)
+        c2(:, i) = matmul(transpose(r0), c(:, i))
+      end do
       ! Calculate the width and depth of the section
-      s1 = TWO * MAXVAL(C2(1, :))
-      s2 = TWO * MAXVAL(C2(2, :))
-      DO i = 1, sz(2)
-        IF (ABS(C2(2, i) - s2 / TWO ) .LT. TOL) THEN
+      s1 = two * maxval(c2(1, :))
+      s2 = two * maxval(c2(2, :))
+      do i = 1, sz(2)
+        if (abs(c2(2, i) - s2 / two ) .lt. tol) then
           ! Node is on the top flange
-          s = C2(1, i) + s1 / TWO
-          psi(i) = s2 * (s1 - TWO * s) / FOUR
-        ELSE IF (ABS(C2(2, i) + s2 / TWO ) .LT. TOL) THEN
+          s = c2(1, i) + s1 / two
+          psi(i) = s2 * (s1 - two * s) / four
+        else if (abs(c2(2, i) + s2 / two ) .lt. tol) then
           ! Node is on the bottom flange
-          s = C2(1, i) + s1 / TWO
-          psi(i) = -s2 * (s1 - TWO * s) / FOUR
-        ELSE
+          s = c2(1, i) + s1 / two
+          psi(i) = -s2 * (s1 - two * s) / four
+        else
           ! Node is on the web line
-          psi(i) = 0.D0
-        END IF
-      END DO
-      END FUNCTION
+          psi(i) = 0.d0
+        end if
+      end do
+      end function
 C *************************************************************************** C
 C     Calculate the warping amplitude
 C *************************************************************************** C
-      PURE FUNCTION warp_amp(X_def, X_ref, u_c, t, R, psi) result(w)
       ! Returns the warping amplitude.
-      ! @ input X_def: x of each node in the deformed configuration
-      ! @ input X_ref: x of each node in the reference configuration
+      ! @ input x_def: x of each node in the deformed configuration
+      ! @ input x_ref: x of each node in the reference configuration
       ! @ input u_c: Translation of the centroid
       ! @ input t: Orientation of the normal to the cross-section
-      ! @ input R: Optimal rotation matrix
+      ! @ input r: Optimal rotation matrix
       ! @ input psi: Warping function at each node
       ! @ returns w: Warping amplitude
+      pure function warp_amp(x_def, x_ref, u_c, t, r, psi) result(w)
       ! Input and output
-      REAL(8), intent(in) ::  X_def(:, :), X_ref(:, :), u_c(3), t(3)
-      REAL(8), intent(in) ::  R(3, 3), psi(:)
-      REAL(8)             ::  w
+      real(8), intent(in) ::  x_def(:, :), x_ref(:, :), u_c(3), t(3)
+      real(8), intent(in) ::  r(3, 3), psi(:)
+      real(8)             ::  w
       ! Internal
-      INTEGER             :: i, non_zero_nodes, sz(2)
+      integer             :: i, non_zero_nodes, sz(2)
       ! Function start
-      sz = SHAPE(X_def)
-      w = 0.D0
+      sz = shape(x_def)
+      w = 0.d0
       non_zero_nodes = 0
-      DO i = 1, sz(2)
-        IF (psi(i) .NE. 0.D0) THEN
+      do i = 1, sz(2)
+        if (psi(i) .ne. 0.d0) then
           non_zero_nodes = non_zero_nodes + 1
-          w = w + 1.D0 / psi(i) 
-     1       *DOT_PRODUCT(t, X_def(:, i) - MATMUL(R, X_ref(:, i) + u_c))
-        END IF
-      END DO
+          w = w + 1.d0 / psi(i) 
+     1       *dot_product(t, x_def(:, i) - matmul(r, x_ref(:, i) + u_c))
+        end if
+      end do
       w = w / non_zero_nodes
-      END FUNCTION
+      end function
 C *************************************************************************** C
 C     Compute the linearized warping vector
 C *************************************************************************** C
-      PURE FUNCTION calc_w(X_def, t0, psi, R, G) 
-     1              result(w_lin)
       ! Returns the linearized warping vector.
       ! @ input x1: x at s = 0 in the deformed configuration
       ! @ input x1_ref: x at s = 0 in the reference configuration
@@ -515,76 +502,78 @@ C *************************************************************************** C
       ! @ input t0: Orientation of the normal to the cross-section in the 
       !            reference configuration
       ! @ input psi: Warping function at s = 0
-      ! @ input R: Optimal rotation matrix
-      ! @ input G: Instantaneous rotation matrix
+      ! @ input r: Optimal rotation matrix
+      ! @ input g: Instantaneous rotation matrix
       ! @ returns w_lin: Linearization of warping amplitude w.r.t X
+      pure function calc_w(x_def, t0, psi, r, g) 
+     1              result(w_lin)
       ! Input and output
-      REAL(8), intent(in)   ::  X_def(:, :), t0(3), psi(:), R(3, 3) 
-      REAL(8), intent(in)   ::  G(:, :)
-      REAL(8), ALLOCATABLE  ::  w_lin(:)
+      real(8), intent(in)   ::  x_def(:, :), t0(3), psi(:), r(3, 3) 
+      real(8), intent(in)   ::  g(:, :)
+      real(8), allocatable  ::  w_lin(:)
       ! Internal
-      INTEGER               ::  sz(2), i, j, num_nodes, num_psi_non_zero
-      REAL(8)               ::  dRdX_rs(3, 3), t(3)
-      REAL(8), ALLOCATABLE  ::  dRdX(:, :)
-      REAL(8)               ::  ZERO, ONE, TWO
-      PARAMETER                 (ZERO = 0.D0, ONE = 1.D0, TWO = 2.D0)
+      integer               ::  sz(2), i, j, num_nodes, num_psi_non_zero
+      real(8)               ::  drdx_rs(3, 3), t(3)
+      real(8), allocatable  ::  drdx(:, :)
+      real(8)               ::  zero, one, two
+      parameter                 (zero = 0.d0, one = 1.d0, two = 2.d0)
       ! Allocate arrays
       ! Number of columns in G should be 3 * num_nodes
-      sz = SHAPE(G)
+      sz = shape(g)
       num_nodes = sz(2) / 3
-      ALLOCATE(w_lin(sz(2)))
-      ALLOCATE(dRdX(9, sz(2)))
+      allocate(w_lin(sz(2)))
+      allocate(drdx(9, sz(2)))
       ! Calculate the derivative of R
-      dRdX = MATMUL(-skew_mat(R), G)
+      drdx = matmul(-skew_mat(r), g)
       ! Assemble the linearized warping vector
-      t = MATMUL(R, t0)
-      w_lin(:) = ZERO
-      DO i = 1, sz(2)
-        dRdX_rs = vec2mat_9(dRdX(:, i))
-        DO j = 1, num_nodes
-          IF (psi(j) .NE. ZERO) THEN
-            w_lin(i) = w_lin(i) 
-!     1      - DOT_PRODUCT(t0, MATMUL(dRdX_rs, X_def(:, j))) / psi(j)
-          END IF
-        END DO
-      END DO
-      DO i = 1, num_nodes
-        IF (psi(i) .NE. ZERO) THEN
-          w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) + t / psi(i)
-        END IF
-      END DO
-      ! Get the average from all the sums
+      t = matmul(r, t0)
+      w_lin(:) = zero
+      ! todo: is the first term always sum to zero?
+      ! Compute the first term
+!      do i = 1, sz(2)
+!        drdx_rs = vec2mat_9(drdx(:, i))
+!        do j = 1, num_nodes
+!          if (psi(j) .ne. zero) then
+!            w_lin(i) = w_lin(i) 
+!     1      - dot_product(t0, matmul(drdx_rs, x_def(:, j))) / psi(j)
+!          end if
+!        end do
+!      end do
+      ! Compute second term
       num_psi_non_zero = 0
-      DO i = 1, SIZE(psi)
-        IF (psi(i) .NE. ZERO) THEN
+      do i = 1, num_nodes
+        if (psi(i) .ne. zero) then
           num_psi_non_zero = num_psi_non_zero + 1
-        END IF
-      END DO
+          w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) + t / psi(i)
+        end if
+      end do
+      ! Compute the average from all the sums for the two terms
       w_lin = w_lin / num_psi_non_zero
-      END FUNCTION
+      
+      end function
 C *************************************************************************** C
 C     Extract rotation vector from quaternion
 C *************************************************************************** C
-      PURE FUNCTION extract_rotation(q) result(phi)
       ! Returns the rotation vector extracted from the quaternion
       ! @ input q: Rotation quaternion
       ! @ returns phi: Euler angle representation of q
       ! From Abaqus Theory Guide 1.3.1
+      pure function extract_rotation(q) result(phi)
       ! Input and output
-      REAL(8), intent(in) ::  q(4)
-      REAL(8)             ::  phi(3)
+      real(8), intent(in) ::  q(4)
+      real(8)             ::  phi(3)
       ! Internal
-      REAL(8)             :: q_mag, rot
-      REAL(8)             :: small
-      PARAMETER              (small = 1.D-14)
+      real(8)             :: q_mag, rot
+      real(8)             :: small
+      parameter              (small = 1.d-14)
       ! Function start
-      q_mag = SQRT(q(2) ** 2 + q(3) ** 2 + q(4) ** 2)
-      IF (q_mag .GT. small) THEN
-        rot = 2.D0 * ATAN2(q_mag, q(1))
+      q_mag = sqrt(q(2) ** 2 + q(3) ** 2 + q(4) ** 2)
+      if (q_mag .gt. small) then
+        rot = 2.d0 * atan2(q_mag, q(1))
         phi = rot / q_mag * q(2:4)
-      ELSE
-        phi(:) = 0.D0
-      END IF
-      END FUNCTION      
+      else
+        phi(:) = 0.d0
+      end if
+      end function      
 C *************************************************************************** C
-      END  ! END SUBROUTINE
+      end  ! END SUBROUTINE
