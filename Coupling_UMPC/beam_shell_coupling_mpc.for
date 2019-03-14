@@ -1,16 +1,34 @@
+C Best-fit beam-to-shell MPC coupling for wide-flange cross-sections
+C
+C Couples beam and shell element domains for wide-flange cross-sections 
+C using an MPC approach. 
+C
+C Notes:
+C     - The beam element must have 7 DOF (3 disp, 3 rot, 1 warping)
+C     - The coupling is only defined for wide-flange (I-shaped) cross-
+C     sections
+C     - The centroid of the shell domain must be initially aligned with
+C     the beam node
+C     - The beam 1 axis is the "strong axis", the "2" is the weak axis
+C     - Intel MKL __MUST__ be linked with Abaqus for this subroutine to
+C     work
+C
+C References:
+C     [1] Hartloper, Lignos and de Sousa (2019), Best-fit Beam-to-shell 
+C     Coupling for Wide-flange Cross-sections
+C     [2] Mostafa and Sivaselvan (2014), On best-fit corotated frames 
+C     for 3D continuum finite elements
+C
+C Written by: A Hartloper, EPFL, alexander.hartloper@epfl.ch
+C 
       subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof,
      * lmpc, kstep, kinc, time, nt, nf, temp, field, ltran, tran)
-C
+      !
       !include 'aba_param.inc'
-C
+      !
       dimension ue(mdof), a(mdof, mdof, n), jdof(mdof, n), x(6, n),
      * u(maxdof, n), uinit(maxdof, n), time(2), temp(nt, n),
      * field(nf, nt, n), ltran(n), tran(3, 3, n)
-C
-C *************************************************************************** C
-C Beam to shell coupling with warping
-C A Hartloper, EPFL
-C *************************************************************************** C
       ! Internal variables
       ! Defines the spatial DOF and size of quaternions
       integer               :: ndim, quatdim
@@ -53,9 +71,9 @@ C *************************************************************************** C
       allocate(q_mat(ndim, ndim * n_shell))
       allocate(psi_all(n_shell))
       allocate(w_lin(ndim * n_shell))
-C *************************************************************************** C
+C ******************************************************************** C
 C Subroutine definition
-C *************************************************************************** C      
+C ******************************************************************** C      
       ! Calculate the centroid locations
       ! The first node is the beam node, the shell nodes follow
       x_shell = x(:, 2:n)
@@ -91,18 +109,19 @@ C *************************************************************************** C
       g_mat = calc_g(op_quat, b_mat, c_mat, lambda, r_mat)
       q_mat = calc_q(op_quat, g_mat)
       
-      ! Calculate the warping amplitude
+      ! Compute the warping amplitude
       r_ref = ini_config(c_mat)
       psi_all = warp_fun(c_mat, r_ref)
       t_def(:) = matmul(r_mat, r_ref(:, 3))
       w_amp = warp_amp(x_shell, x_shell_def, u_cent, t_def, r_mat,
      1                 psi_all)
-      ! Calculate the linearized warping
+     
+      ! Compute the linearized warping
       w_lin = calc_w(x_shell_def, r_ref(:, 3), psi_all, r_mat, g_mat)
       
       ! Assign the A submatrix for the beam node and set active DOF
-      forall(i = 1:7) a(i, i, 1) = one
-      forall(i = 1:7) jdof(i, 1) = i
+      forall(i = 1:maxdof) a(i, i, 1) = one
+      forall(i = 1:maxdof) jdof(i, 1) = i
       
       ! Assign the A submatrices for the shell nodes
       do i = 2, n
@@ -118,40 +137,41 @@ C *************************************************************************** C
         a(6, 1:3, i) = -q_mat(3, 3*i_sh-2:3*i_sh)
         ! Warping constraint
         a(7, 1:3, i) = w_lin(3*i_sh-2:3*i_sh) 
-        ! Set the active DOF in the shell elements
+        ! Set the active DOF (displacement) in the shell elements
         jdof(1, i) = 1
         jdof(2, i) = 2
         jdof(3, i) = 3
       end do
             
-      ! Update the node DOF exactly
+      ! Update the beam node DOF exactly
       ue(1:3) = u_cent
       ue(4:6) = extract_rotation(op_quat)
       ue(7) = w_amp
       return
       
       contains
-C *************************************************************************** C
+C ******************************************************************** C
 C     Skew symmetric matrix from vector
-C *************************************************************************** C
+C ******************************************************************** C
       ! Returns the 3x3 skew symmetric matrix from axial vector v
       ! @ input v: Axial vector of length 3
       ! @ returns vss: 3x3 skew symmetric matrix
       pure function skew_sym(v) result(vss)
       real(8), intent(in) :: v(3)
       real(8)             :: vss(3, 3)
-      ! Specify the columns of the skew_symmetric matrix (transpose of the rows)
+      ! Specify the columns of the skew_symmetric matrix
       vss(:, 1) = [ 0.d0, v(3), -v(2) ]
       vss(:, 2) = [ -v(3), 0.d0, v(1) ]
       vss(:, 3) = [ v(2), -v(1), 0.d0 ]
       end function
-C *************************************************************************** C
+C ******************************************************************** C
 C     Left quaternion representation from 3 element vector
-C *************************************************************************** C
+C ******************************************************************** C
       ! Returns the 4x4 left-side matrix representing {v0, v}
       ! @ input v0: Real part of rotation quaternion
       ! @ input v: Imaginary part of rotation quaternion, length 3
-      ! @ return ql: Matrix representing left-hand quaternion multiplication
+      ! @ return ql: Matrix representing left-hand quaternion 
+      !              multiplication
       pure function left_quat(v0, v) result(ql)
       real(8), intent(in) :: v0
       real(8), intent(in) :: v(3)
@@ -163,13 +183,14 @@ C *************************************************************************** C
       ql(2:4, 2:4) = skew_sym(v)
       forall(i = 1:3) ql(1 + i, 1 + i) = ql(1 + i, 1 + i) + v0
       end function
-C *************************************************************************** C
+C ******************************************************************** C
 C     Right quaternion representation from 3 element vector
-C *************************************************************************** C
+C ******************************************************************** C
       ! Returns the 4x4 right-side matrix representing {v0, v}
       ! @ input v0: Real part of rotation quaternion
       ! @ input v: Imaginary part of rotation quaternion, length 3
-      ! @ return qr: Matrix representing right-hand quaternion multiplication
+      ! @ return qr: Matrix representing right-hand quaternion 
+      !              multiplication
       pure function right_quat(v0, v) result(qr)
       real(8), intent(in) :: v0
       real(8), intent(in) :: v(3)
@@ -181,9 +202,9 @@ C *************************************************************************** C
       qr(2:4, 2:4) = -skew_sym(v)   
       forall(i = 1:3) qr(1 + i, 1 + i) = qr(1 + i, 1 + i) + v0   
       end function
-C *************************************************************************** C
+C ******************************************************************** C
 C     Rotation matrix from quaternion
-C *************************************************************************** C
+C ******************************************************************** C
       ! Returns the 3x3 matrix representing rotation quaternion q
       ! @ input q: Length 4 rotation quaternion
       ! @ returns r: 3x3 rotation matrix
@@ -201,13 +222,13 @@ C *************************************************************************** C
      1            two * (q(3) * q(4) - q(1) * q(2)),
      2            one - two * (q(2) ** 2 + q(3) ** 2) ]
       end function
-C *************************************************************************** C
+C ******************************************************************** C
 C     Stack of skew symmetric matrix from columns of matrix
-C *************************************************************************** C
+C ******************************************************************** C
       ! Returns the 9x3 skew symmetric matrix from the columns of R
       ! @ input r: 3x3 matrix
-      ! @ outputs rr: Vertical stack of the skew symmetric matrices formed from
-      !               the 3 columns of R
+      ! @ outputs rr: Vertical stack of the skew symmetric matrices 
+      !               formed from the 3 columns of R
       pure function skew_mat(r) result(rr)
       real(8), intent(in) :: r(3, 3)
       real(8)             :: rr(9, 3)
@@ -216,9 +237,9 @@ C *************************************************************************** C
       rr(4:6, :) = skew_sym(r(:, 2))
       rr(7:9, :) = skew_sym(r(:, 3))
       end function
-C *************************************************************************** C
+C ******************************************************************** C
 C     Create a 3x3 matrix out of vector of length 9
-C *************************************************************************** C
+C ******************************************************************** C
       ! Returns the 3x3 matrix from the vector v
       ! @ input v: Vector of lenght 9
       ! @ returns r: 3x3 matrix
@@ -230,13 +251,14 @@ C *************************************************************************** C
       r(:, 2) = [v(2), v(5), v(8)]
       r(:, 3) = [v(3), v(6), v(9)]
       end function
-C *************************************************************************** C
+C ******************************************************************** C
 C     Compute optimal rotation quaternion
-C *************************************************************************** C
+C ******************************************************************** C
       ! Returns the optimal rotation and associated eigenvalue
-      ! @ input b: \mathcal{B} matrix from Mostafa and Sivaselvan
+      ! @ input b: \mathcal{B} matrix from [2]
       ! @ returns lambda_and_q: First entry is the minimum eigenvalue,
-      !                         following entries are the associated eigenvector
+      !                         following entries are the associated 
+      !                         eigenvector
       function calc_opquat(b) result(lambda_and_q)
       real(8), intent(in) ::  b(4, 4)
       real(8)             ::  be(4, 4)
@@ -270,13 +292,13 @@ C *************************************************************************** C
       lambda_and_q(1) = w(1)
       lambda_and_q(2:5) = z(:, 1)
       end function
-C *************************************************************************** C
+C ******************************************************************** C
 C     Compute G matrix
-C *************************************************************************** C
-      ! Returns the instantaneous rotation matrix from Mostafa and Sivaselvan
+C ******************************************************************** C
+      ! Returns the instantaneous rotation matrix
       ! @ input q: Optimal rotation quaternion
-      ! @ input b: \matcal{B} matrix from Mostafa and Sivaselvan
-      ! @ input c: C matrix from Mostafa and Sivaselvan
+      ! @ input b: \matcal{B} matrix from [2]
+      ! @ input c: C matrix from [2]
       ! @ input lam: Minimum eigenvalue of B matrix
       ! @ input r: Rotation matrix of optimal rotation quaternion
       ! @ returns g: Instantaneous rotation matrix
@@ -318,9 +340,9 @@ C *************************************************************************** C
       g = 4.d0 * g
       
       end function
-C *************************************************************************** C
+C ******************************************************************** C
 C     Compute linearized rotation matrix
-C *************************************************************************** C
+C ******************************************************************** C
       ! Returns the linearization of the optimal rotation matrix
       ! @ input q: Optimal rotation quaternion
       ! @ input g: Instantaneous rotation matrix
@@ -342,18 +364,19 @@ C *************************************************************************** C
       qq = matmul(qrr_3(2:quatdim, :), g)
       
       end function
-C *************************************************************************** C
+C ******************************************************************** C
 C     Order reference configuration
-C *************************************************************************** C
+C ******************************************************************** C
       ! Orders o to have the orientation x, y, z as the columns of o2
       ! @ input o: Un-ordered reference configuration
-      ! @ returns o2: Ordered reference configuration such that the column of
-      !               O2 [x, y, z] are a right-handed coordinate system.
+      ! @ returns o2: Ordered reference configuration such that the 
+      !               columns of o2 are a right-handed coordinate system
       pure function order_ini(o) result(o2)
       real(8), intent(in) :: o(3, 3)
       real(8)             :: o2(3, 3), xo(3), yo(3), zo(3), cross_vec(3)
       real(8)             :: test
-      ! z is the min eigenvalue, y is the greatest eigenvalue, x is the other
+      ! z is the min eigenvalue, y is the greatest eigenvalue, 
+      ! x is the remaining eigenvalue
       zo = o(:, 1)
       yo = o(:, 3)
       xo = o(:, 2)
@@ -374,13 +397,13 @@ C *************************************************************************** C
         o2(:, 3) = -zo
       end if
       end function
-C *************************************************************************** C
+C ******************************************************************** C
 C     Compute reference configuration
-C *************************************************************************** C
-      ! Returns the right-hand ordered reference configuration of ref_pts.
+C ******************************************************************** C
+      ! Returns the right-hand ordered reference configuration
       ! @ input ref_pts: x, y, z coordinates of each point
-      ! @ returns o: Orientation of the reference configuration that is a 
-      !              valid right-handed coordinate system.
+      ! @ returns o: Orientation of the reference configuration that is 
+      !              a valid right-handed coordinate system.
       function ini_config(ref_pts) result(o)
       !
       real(8), intent(in) :: ref_pts(:, :)
@@ -420,11 +443,12 @@ C *************************************************************************** C
       ! The eigenvalues are returned in asscending order
       o = order_ini(z)
       end function
-C *************************************************************************** C
+C ******************************************************************** C
 C     Calculate the warping function for all nodes
-C *************************************************************************** C
+C ******************************************************************** C
       ! Returns the warping function evaluated at each node.
-      ! @ input c: Location of nodes in reference config. relative to centroid.
+      ! @ input c: Location of nodes in reference config. relative to 
+      !            centroid.
       ! @ returns psi: Warping function each node.
       pure function warp_fun(c, r0) result(psi)
       ! Input and output
@@ -461,9 +485,9 @@ C *************************************************************************** C
         end if
       end do
       end function
-C *************************************************************************** C
+C ******************************************************************** C
 C     Calculate the warping amplitude
-C *************************************************************************** C
+C ******************************************************************** C
       ! Returns the warping amplitude.
       ! @ input x_def: x of each node in the deformed configuration
       ! @ input x_ref: x of each node in the reference configuration
@@ -492,19 +516,19 @@ C *************************************************************************** C
       end do
       w = w / non_zero_nodes
       end function
-C *************************************************************************** C
+C ******************************************************************** C
 C     Compute the linearized warping vector
-C *************************************************************************** C
+C ******************************************************************** C
       ! Returns the linearized warping vector.
       ! @ input x1: x at s = 0 in the deformed configuration
       ! @ input x1_ref: x at s = 0 in the reference configuration
       ! @ input u_c: Translation of the centroid
-      ! @ input t0: Orientation of the normal to the cross-section in the 
-      !            reference configuration
+      ! @ input t0: Orientation of the normal to the cross-section in  
+      !             the reference configuration
       ! @ input psi: Warping function at s = 0
       ! @ input r: Optimal rotation matrix
       ! @ input g: Instantaneous rotation matrix
-      ! @ returns w_lin: Linearization of warping amplitude w.r.t X
+      ! @ returns w_lin: Linearization of warping amplitude w.r.t x
       pure function calc_w(x_def, t0, psi, r, g) 
      1              result(w_lin)
       ! Input and output
@@ -551,9 +575,9 @@ C *************************************************************************** C
       w_lin = w_lin / num_psi_non_zero
       
       end function
-C *************************************************************************** C
+C ******************************************************************** C
 C     Extract rotation vector from quaternion
-C *************************************************************************** C
+C ******************************************************************** C
       ! Returns the rotation vector extracted from the quaternion
       ! @ input q: Rotation quaternion
       ! @ returns phi: Euler angle representation of q
@@ -574,6 +598,6 @@ C *************************************************************************** C
       else
         phi(:) = 0.d0
       end if
-      end function      
-C *************************************************************************** C
+      end function
+C ******************************************************************** C
       end  ! END SUBROUTINE
