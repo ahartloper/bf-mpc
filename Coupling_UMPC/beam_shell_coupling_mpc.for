@@ -400,7 +400,7 @@ C ******************************************************************** C
       cross_vec(2) = -(yo(1) * zo(3) - yo(3) * zo(1))
       cross_vec(3) = yo(1) * zo(2) - yo(2) * zo(1)
       test = dot_product(xo, cross_vec)
-      if (test .gt. 0) then
+      if (test > 0) then
         ! Correct assumption, right hand system
         o2(:, 1) = xo
         o2(:, 2) = yo
@@ -486,11 +486,11 @@ C ******************************************************************** C
       s1 = two * maxval(c2(1, :))
       s2 = two * maxval(c2(2, :))
       do i = 1, sz(2)
-        if (abs(c2(2, i) - s2 / two ) .lt. tol) then
+        if (abs(c2(2, i) - s2 / two ) < tol) then
           ! Node is on the top flange
           s = c2(1, i) + s1 / two
           psi(i) = s2 * (s1 - two * s) / four
-        else if (abs(c2(2, i) + s2 / two ) .lt. tol) then
+        else if (abs(c2(2, i) + s2 / two ) < tol) then
           ! Node is on the bottom flange
           s = c2(1, i) + s1 / two
           psi(i) = -s2 * (s1 - two * s) / four
@@ -523,7 +523,7 @@ C ******************************************************************** C
       w = 0.d0
       non_zero_nodes = 0
       do i = 1, sz(2)
-        if (psi(i) .ne. 0.d0) then
+        if (psi(i) /= 0.d0) then
           non_zero_nodes = non_zero_nodes + 1
           w = w + 1.d0 / psi(i) 
      1       *dot_product(t, x_def(:, i) - matmul(r, x_ref(:, i) + u_c))
@@ -572,7 +572,7 @@ C ******************************************************************** C
 !      do i = 1, sz(2)
 !        drdx_rs = vec2mat_9(drdx(:, i))
 !        do j = 1, num_nodes
-!          if (psi(j) .ne. zero) then
+!          if (psi(j) /= zero) then
 !            w_lin(i) = w_lin(i) 
 !     1      - dot_product(t0, matmul(drdx_rs, x_def(:, j))) / psi(j)
 !          end if
@@ -581,7 +581,7 @@ C ******************************************************************** C
       ! Compute second term
       num_psi_non_zero = 0
       do i = 1, num_nodes
-        if (psi(i) .ne. zero) then
+        if (psi(i) /= zero) then
           num_psi_non_zero = num_psi_non_zero + 1
           w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) + t / psi(i)
         end if
@@ -607,7 +607,7 @@ C ******************************************************************** C
       parameter              (small = 1.d-14)
       ! Function start
       q_mag = sqrt(q(2) ** 2 + q(3) ** 2 + q(4) ** 2)
-      if (q_mag .gt. small) then
+      if (q_mag > small) then
         rot = 2.d0 * atan2(q_mag, q(1))
         phi = rot / q_mag * q(2:4)
       else
@@ -624,10 +624,11 @@ C ******************************************************************** C
       !
       ! Notes:
       !   - The weight represents the equivalent area of each node
-      !   - tf_tw_code is defined as [d][tf][tw] where d is the number
+      !   - tf_tw_code is defined as [d][tf][tw], where d is the number
       !     of decimals in tf and tw
       !   - tf and tw are defined as tf = t_f; tw = E_w / E_f * t_w 
       !     to account for differences in elastic moduli
+      !   - The weights are only valid if the interface is elastic
       !   - The flange and web mesh distances are assumed to be constant
       !     between nodes
       pure function calc_weights(p, tf_tw_code) result(w)
