@@ -22,13 +22,13 @@ C
 C Written by: A Hartloper, EPFL, alexander.hartloper@epfl.ch
 C 
       subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof,
-     * lmpc, kstep, kinc, time, nt, nf, temp, field, ltran, tran)
+     1 lmpc, kstep, kinc, time, nt, nf, temp, field, ltran, tran)
       !
       !include 'aba_param.inc'
       !
       dimension ue(mdof), a(mdof, mdof, n), jdof(mdof, n), x(6, n),
-     * u(maxdof, n), uinit(maxdof, n), time(2), temp(nt, n),
-     * field(nf, nt, n), ltran(n), tran(3, 3, n)
+     1 u(maxdof, n), uinit(maxdof, n), time(2), temp(nt, n),
+     2 field(nf, nt, n), ltran(n), tran(3, 3, n)
       ! Internal variables
       ! Defines the spatial DOF and size of quaternions
       integer               :: ndim, quatdim
@@ -38,6 +38,8 @@ C
       real(8)               :: n_reciprocal
       ! Loop counters
       integer               :: i, i_sh
+      ! Nodal weight factors
+      real(8)               :: weights(n-1), total_weight
       ! Warping amplitude
       real(8)               :: w_amp
       ! Centroids (deformed and initial)
@@ -73,7 +75,7 @@ C
       allocate(w_lin(ndim * n_shell))
 C ******************************************************************** C
 C Subroutine definition
-C ******************************************************************** C      
+C ******************************************************************** C
       ! Calculate the centroid locations
       ! The first node is the beam node, the shell nodes follow
       x_shell = x(:, 2:n)
@@ -90,11 +92,25 @@ C ******************************************************************** C
       xc = xc * n_reciprocal
       u_cent = xc - xc0
       
-      ! Compute the optimal rotation quaternion
-      b_mat(:, :) = zero
+      ! Find the reference orientation
       do i = 1, n_shell
         c_mat(:, i) = x_shell(:, i) - xc0
         d_mat(:, i) = x_shell_def(:, i) - xc
+      end do
+      r_ref = ini_config(c_mat)
+      
+      ! Calculate the nodal weights
+      ! The centroid does not depend on the weights due to symmetry so
+      ! it's valid to calculate the centroid first
+      weights = calc_weights(matmul(transpose(r_ref), c_mat), jtype)
+      total_weight = zero
+      do i = 1, n_shell
+        total_weight = total_weight + weights(i)
+      end do
+      
+      ! Compute the optimal rotation quaternion
+      b_mat(:, :) = zero
+      do i = 1, n_shell
         beta = left_quat(zero,d_mat(:, i))- right_quat(zero,c_mat(:, i))
         b_mat = b_mat + matmul(transpose(beta), beta)
       end do
@@ -110,7 +126,6 @@ C ******************************************************************** C
       q_mat = calc_q(op_quat, g_mat)
       
       ! Compute the warping amplitude
-      r_ref = ini_config(c_mat)
       psi_all = warp_fun(c_mat, r_ref)
       t_def(:) = matmul(r_mat, r_ref(:, 3))
       w_amp = warp_amp(x_shell, x_shell_def, u_cent, t_def, r_mat,
@@ -128,9 +143,9 @@ C ******************************************************************** C
         ! Index corresponding to the shell nodes
         i_sh = i - 1
         ! Displacement constraints
-        a(1, 1, i) = -n_reciprocal
-        a(2, 2, i) = -n_reciprocal
-        a(3, 3, i) = -n_reciprocal
+        a(1, 1, i) = -weights(i_sh) / total_weight
+        a(2, 2, i) = -weights(i_sh) / total_weight
+        a(3, 3, i) = -weights(i_sh) / total_weight
         ! Rotation constraints
         a(4, 1:3, i) = -q_mat(1, 3*i_sh-2:3*i_sh)
         a(5, 1:3, i) = -q_mat(2, 3*i_sh-2:3*i_sh)
@@ -598,6 +613,138 @@ C ******************************************************************** C
       else
         phi(:) = 0.d0
       end if
+      end function
+C ******************************************************************** C
+C     Determine the weights for all the nodes
+C ******************************************************************** C
+      ! Returns the weight value for each node
+      ! @ input p: Shell nodes in the reference configuration, size 3xN
+      ! @ input tf_tw_code: Encoded flange and web thickness factors
+      ! @ returns w: Weight value for each node
+      !
+      ! Notes:
+      !   - The weight represents the equivalent area of each node
+      !   - tf_tw_code is defined as [d][tf][tw] where d is the number
+      !     of decimals in tf and tw
+      !   - tf and tw are defined as tf = t_f; tw = E_w / E_f * t_w 
+      !     to account for differences in elastic moduli
+      !   - The flange and web mesh distances are assumed to be constant
+      !     between nodes
+      pure function calc_weights(p, tf_tw_code) result(w)
+      ! Input and output
+      real(8), intent(in)   ::  p(:, :)
+      integer, intent(in)   ::  tf_tw_code
+      real(8), allocatable  ::  w(:)
+      ! Internal variables
+      ! Tags for node positions
+      integer               ::  web_tag, flange_tag, corner_tag, 
+     1                          joint_tag
+      parameter                 (web_tag=1, flange_tag=2, corner_tag=3,
+     1                           joint_tag=4)
+      integer, allocatable  ::  classification(:)
+      ! For weights at each tag
+      real(8)               ::  web_weight, flange_weight,corner_weight,
+     1                          joint_weight
+      real(8)               ::  tf, tw, delta_f, delta_w, x_max, y_max,
+     1                          pt(3), x_max_2, y_max_2
+      integer               ::  i, sz(2), d_digits, d, n_digits, c,
+     1                          tf_tw
+      ! Allocate arrays
+      sz = shape(p)
+      allocate(w(sz(2)))
+      allocate(classification(sz(2)))
+      ! Function start
+      
+      ! Classify the points
+      classification(:) = 0
+      x_max = maxval(p(1, :))
+      y_max = maxval(p(2, :))
+      do i = 1, sz(2)
+        pt = p(:, i)
+        if (pt(1) == 0.d0) then
+          ! Point is on the web
+          classification(i) = web_tag
+        end if
+        if (abs(pt(2)) == y_max) then
+          ! Point is on the flange
+          if (classification(i) == web_tag) then
+            ! Point is on the web and flange
+            classification(i) = joint_tag;
+          else if (abs(pt(1)) == x_max) then
+            ! Point is on the corner of the flange
+            classification(i) = corner_tag
+          else
+            ! Just on the flange
+            classification(i) = flange_tag
+          end if
+        end if
+      end do
+      
+      ! Calculate the mesh distance for flange and web nodes
+      ! Start search for 2nd greatest values
+      x_max_2 = -x_max
+      y_max_2 = -y_max
+      do i = 1, sz(2)
+        pt = p(:, i)
+        c = classification(i)
+        ! Web
+        if (c == web_tag) then
+          ! Set 2nd largest y value
+          if (y_max_2 < pt(2) .and. pt(2) < y_max) then
+            y_max_2 = pt(2)
+          end if
+        end if
+        ! Flange
+        if ((c==flange_tag .or. c==joint_tag) .and. pt(2) > 0.d0) then
+          ! Set the 2nd largest x value
+          if (x_max_2 < pt(1) .and. pt(1) < x_max) then
+            x_max_2 = pt(1)
+          end if
+        end if
+      end do
+      delta_f = x_max - x_max_2
+      delta_w = y_max - y_max_2
+      
+      ! Decode the flange and web thickness factors
+      ! d_digits starts at 4 since there will be at least 5 digits
+      d_digits = 4;
+      do while (tf_tw_code / 10 ** d_digits > 10)
+          ! Divide by 10 until we get something less than 10, this is 
+          ! the first digit of tf_tw_code
+          d_digits = d_digits + 1
+      end do
+      d = tf_tw_code / 10 ** d_digits
+      ! The number of digits in each thickness is assumed to be equal
+      n_digits = d_digits / 2
+      ! The thickness values are what is left after we subtract the d 
+      ! value from the front
+      tf_tw = tf_tw_code - d * (10 ** d_digits)
+      ! Use the same subtracting off-the-front to get the tf and then tw
+      ! The int casting is to truncate the un-needed digits
+      tf = int(tf_tw / 10 ** n_digits)
+      tf = tf / 10. ** d
+      tw = int(tf_tw - int(tf * 10. ** (d + n_digits)))
+      tw = tw / 10. ** d
+      
+      ! Calculate the weights for each class
+      web_weight = delta_w * tw
+      flange_weight = delta_f * tf
+      corner_weight = 0.5 * flange_weight
+      joint_weight = flange_weight + 0.5 * tw * (delta_w - tf)
+      
+      ! Assign weights
+      do i = 1, sz(2)
+        c = classification(i)
+        if (c == web_tag) then
+          w(i) = web_weight
+        else if (c == flange_tag) then
+          w(i) = flange_weight
+        else if (c == corner_tag) then
+          w(i) = corner_weight
+        else if (c == joint_tag) then
+          w(i) = joint_weight
+        end if
+      end do
       end function
 C ******************************************************************** C
       end  ! END SUBROUTINE
