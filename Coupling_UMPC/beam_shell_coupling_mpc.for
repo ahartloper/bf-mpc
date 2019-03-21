@@ -39,7 +39,7 @@ C
       ! Loop counters
       integer               :: i, i_sh
       ! Nodal weight factors
-      real(8)               :: weights(n-1), total_weight
+      real(8)               :: total_weight
       ! Warping amplitude
       real(8)               :: w_amp
       ! Centroids (deformed and initial)
@@ -52,7 +52,7 @@ C
       real(8), allocatable  :: c_mat(:, :), d_mat(:, :), g_mat(:, :), 
      1                         q_mat(:, :), x_shell_def(:, :),
      2                         x_shell(:, :), u_shell(:, :), 
-     3                         w_lin(:), psi_all(:)
+     3                         w_lin(:), psi_all(:), weights(:)
       ! For the rotation quaternion and computations
       real(8)               :: b_mat(quatdim, quatdim), 
      1                         beta(quatdim, quatdim)
@@ -73,6 +73,7 @@ C
       allocate(q_mat(ndim, ndim * n_shell))
       allocate(psi_all(n_shell))
       allocate(w_lin(ndim * n_shell))
+      allocate(weights(n_shell))
 C ******************************************************************** C
 C Subroutine definition
 C ******************************************************************** C
@@ -112,7 +113,7 @@ C ******************************************************************** C
       b_mat(:, :) = zero
       do i = 1, n_shell
         beta = left_quat(zero,d_mat(:, i))- right_quat(zero,c_mat(:, i))
-        b_mat = b_mat + matmul(transpose(beta), beta)
+        b_mat = b_mat + weights(i) * matmul(transpose(beta), beta)
       end do
       lam_q = calc_opquat(b_mat)
       lambda = lam_q(1)
@@ -132,7 +133,8 @@ C ******************************************************************** C
      1                 psi_all)
      
       ! Compute the linearized warping
-      w_lin = calc_w(x_shell_def, r_ref(:, 3), psi_all, r_mat, g_mat)
+      w_lin = calc_w_weighted(x_shell_def, r_ref(:, 3), psi_all, r_mat, 
+     1                        g_mat, weights)
       
       ! Assign the A submatrix for the beam node and set active DOF
       forall(i = 1:maxdof) a(i, i, 1) = one
@@ -147,9 +149,9 @@ C ******************************************************************** C
         a(2, 2, i) = -weights(i_sh) / total_weight
         a(3, 3, i) = -weights(i_sh) / total_weight
         ! Rotation constraints
-        a(4, 1:3, i) = -q_mat(1, 3*i_sh-2:3*i_sh)
-        a(5, 1:3, i) = -q_mat(2, 3*i_sh-2:3*i_sh)
-        a(6, 1:3, i) = -q_mat(3, 3*i_sh-2:3*i_sh)
+        a(4, 1:3, i) = -q_mat(1, 3*i_sh-2:3*i_sh) * weights(i_sh)
+        a(5, 1:3, i) = -q_mat(2, 3*i_sh-2:3*i_sh) * weights(i_sh)
+        a(6, 1:3, i) = -q_mat(3, 3*i_sh-2:3*i_sh) * weights(i_sh)
         ! Warping constraint
         a(7, 1:3, i) = w_lin(3*i_sh-2:3*i_sh) 
         ! Set the active DOF (displacement) in the shell elements
@@ -358,10 +360,10 @@ C ******************************************************************** C
 C ******************************************************************** C
 C     Compute linearized rotation matrix
 C ******************************************************************** C
-      ! Returns the linearization of the optimal rotation matrix
+      ! Returns the linearization of the optimal rotation vector
       ! @ input q: Optimal rotation quaternion
       ! @ input g: Instantaneous rotation matrix
-      ! @ returns qq: Linearization of rotation matrix R
+      ! @ returns qq: Linearized rotation vector
       pure function calc_q(q, g) result(qq)
       ! Input and output
       real(8), intent(in)   ::  q(4), g(:, :)
@@ -543,16 +545,17 @@ C ******************************************************************** C
       ! @ input psi: Warping function at s = 0
       ! @ input r: Optimal rotation matrix
       ! @ input g: Instantaneous rotation matrix
+      ! @ input we: Weight value for each node
       ! @ returns w_lin: Linearization of warping amplitude w.r.t x
-      pure function calc_w(x_def, t0, psi, r, g) 
+      pure function calc_w_weighted(x_def, t0, psi, r, g, we) 
      1              result(w_lin)
       ! Input and output
       real(8), intent(in)   ::  x_def(:, :), t0(3), psi(:), r(3, 3) 
-      real(8), intent(in)   ::  g(:, :)
+      real(8), intent(in)   ::  g(:, :), we(:)
       real(8), allocatable  ::  w_lin(:)
       ! Internal
       integer               ::  sz(2), i, j, num_nodes, num_psi_non_zero
-      real(8)               ::  drdx_rs(3, 3), t(3)
+      real(8)               ::  drdx_rs(3, 3), t(3), we_total
       real(8), allocatable  ::  drdx(:, :)
       real(8)               ::  zero, one, two
       parameter                 (zero = 0.d0, one = 1.d0, two = 2.d0)
@@ -580,14 +583,16 @@ C ******************************************************************** C
 !      end do
       ! Compute second term
       num_psi_non_zero = 0
+      we_total = zero
       do i = 1, num_nodes
         if (psi(i) /= zero) then
-          num_psi_non_zero = num_psi_non_zero + 1
-          w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) + t / psi(i)
+          we_total = we_total + we(i)
+          !num_psi_non_zero = num_psi_non_zero + 1
+          w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) + t / psi(i) * we(i)
         end if
       end do
       ! Compute the average from all the sums for the two terms
-      w_lin = w_lin / num_psi_non_zero
+      w_lin = w_lin / we_total
       
       end function
 C ******************************************************************** C
@@ -655,7 +660,6 @@ C ******************************************************************** C
       allocate(w(sz(2)))
       allocate(classification(sz(2)))
       ! Function start
-      
       ! Classify the points
       classification(:) = 0
       x_max = maxval(p(1, :))
@@ -731,7 +735,7 @@ C ******************************************************************** C
       web_weight = delta_w * tw
       flange_weight = delta_f * tf
       corner_weight = 0.5 * flange_weight
-      joint_weight = flange_weight + 0.5 * tw * (delta_w - tf)
+      joint_weight = flange_weight + 0.5 * tw * delta_w
       
       ! Assign weights
       do i = 1, sz(2)
