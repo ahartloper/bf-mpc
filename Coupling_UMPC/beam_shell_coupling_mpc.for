@@ -59,6 +59,8 @@ C
       real(8)               :: op_quat(quatdim)
       real(8)               :: lambda
       real(8)               :: lam_q(quatdim+1)
+      ! Linearized displacment
+      real(8), allocatable  ::  disp_lin(:, :)
       ! Numerical parameters
       real(8)               :: one, two, zero
       parameter                (one=1.0d0, two=2.0d0, zero=0.d0)
@@ -73,7 +75,8 @@ C
       allocate(q_mat(ndim, ndim * n_shell))
       allocate(psi_all(n_shell))
       allocate(w_lin(ndim * n_shell))
-      allocate(weights(n_shell))
+      allocate(weights(2 * n_shell))
+      allocate(disp_lin(ndim, n_shell))
 C ******************************************************************** C
 C Subroutine definition
 C ******************************************************************** C
@@ -102,7 +105,9 @@ C ******************************************************************** C
       
       ! Calculate the nodal weights
       ! The centroid does not depend on the weights due to symmetry so
-      ! it's valid to calculate the centroid first
+      ! it's valid to calculate the centroid first.
+      ! The first n_shell values are the area weights, the rest are 
+      ! shear weights.
       weights = calc_weights(matmul(transpose(r_ref), c_mat), jtype)
       total_weight = zero
       do i = 1, n_shell
@@ -136,6 +141,9 @@ C ******************************************************************** C
       w_lin = calc_w_weighted(x_shell_def, r_ref(:, 3), psi_all, r_mat, 
      1                        g_mat, weights)
       
+      ! Compute the linearized centroid displacement
+      disp_lin = calc_disp_lin(n_shell, weights, total_weight, r_ref, 
+     1                         r_mat)
       ! Assign the A submatrix for the beam node and set active DOF
       forall(i = 1:maxdof) a(i, i, 1) = one
       forall(i = 1:maxdof) jdof(i, 1) = i
@@ -145,9 +153,9 @@ C ******************************************************************** C
         ! Index corresponding to the shell nodes
         i_sh = i - 1
         ! Displacement constraints
-        a(1, 1, i) = -weights(i_sh) / total_weight
-        a(2, 2, i) = -weights(i_sh) / total_weight
-        a(3, 3, i) = -weights(i_sh) / total_weight
+        a(1, 1, i) = disp_lin(1, i_sh)
+        a(2, 2, i) = disp_lin(2, i_sh)
+        a(3, 3, i) = disp_lin(3, i_sh)
         ! Rotation constraints
         a(4, 1:3, i) = -q_mat(1, 3*i_sh-2:3*i_sh) * weights(i_sh)
         a(5, 1:3, i) = -q_mat(2, 3*i_sh-2:3*i_sh) * weights(i_sh)
@@ -636,6 +644,8 @@ C ******************************************************************** C
       !   - The weights are only valid if the interface is elastic
       !   - The flange and web mesh distances are assumed to be constant
       !     between nodes
+      !   - The first N values of w are the area weights, the next N
+      !     values are the shear weights for the x-axis
       pure function calc_weights(p, tf_tw_code) result(w)
       ! Input and output
       real(8), intent(in)   ::  p(:, :)
@@ -653,11 +663,15 @@ C ******************************************************************** C
      1                          joint_weight
       real(8)               ::  tf, tw, delta_f, delta_w, x_max, y_max,
      1                          pt(3), x_max_2, y_max_2
-      integer               ::  i, sz(2), d_digits, d, n_digits, c,
+      integer               ::  i, sz(2), d_digits, deci, n_digits, c,
      1                          tf_tw
+      ! For shear weights
+      real(8) ::  width, depth, v_f_w(2), v_total, v_prct_f, v_prct_w, 
+     1 a_web, a_flange, v_web_height, v_flange_weight, v_corner_weight, 
+     2 v_joint_weight
       ! Allocate arrays
       sz = shape(p)
-      allocate(w(sz(2)))
+      allocate(w(2 * sz(2)))
       allocate(classification(sz(2)))
       ! Function start
       ! Classify the points
@@ -718,37 +732,122 @@ C ******************************************************************** C
           ! the first digit of tf_tw_code
           d_digits = d_digits + 1
       end do
-      d = tf_tw_code / 10 ** d_digits
+      deci = tf_tw_code / 10 ** d_digits
       ! The number of digits in each thickness is assumed to be equal
       n_digits = d_digits / 2
-      ! The thickness values are what is left after we subtract the d 
+      ! The thickness values are what is left after we subtract the deci 
       ! value from the front
-      tf_tw = tf_tw_code - d * (10 ** d_digits)
+      tf_tw = tf_tw_code - deci * (10 ** d_digits)
       ! Use the same subtracting off-the-front to get the tf and then tw
       ! The int casting is to truncate the un-needed digits
       tf = int(tf_tw / 10 ** n_digits)
-      tf = tf / 10. ** d
-      tw = int(tf_tw - int(tf * 10. ** (d + n_digits)))
-      tw = tw / 10. ** d
+      tf = tf / 10. ** deci
+      tw = int(tf_tw - int(tf * 10. ** (deci + n_digits)))
+      tw = tw / 10. ** deci
       
-      ! Calculate the weights for each class
+      ! Calculate the area weights for each class
       web_weight = delta_w * tw
       flange_weight = delta_f * tf
-      corner_weight = 0.5 * flange_weight
-      joint_weight = flange_weight + 0.5 * tw * delta_w
+      corner_weight = 0.5d0 * flange_weight
+      joint_weight = flange_weight + 0.5d0 * tw * delta_w
+      
+      ! Calculate the shear weights
+      width = two * x_max
+      depth = two * y_max + tf
+      v_f_w = shear_factors(depth, width, tf, tw)
+      v_total = two * v_f_w(1) + v_f_w(2)
+      v_prct_f = v_f_w(1) / v_total
+      v_prct_w = v_f_w(2) / v_total
+      a_web = tw * (depth - tf)
+      a_flange = tf * width
+      ! Weight factors
+      v_web_weight = web_weight / a_web * v_prct_w
+      v_flange_weight = flange_weight / a_flange * v_prct_f
+      v_corner_weight = 0.5 * v_flange_weight
+      v_joint_weight = v_flange_weight + 0.5 * v_web_weight
       
       ! Assign weights
       do i = 1, sz(2)
         c = classification(i)
         if (c == web_tag) then
           w(i) = web_weight
+          w(i+sz(2)) = v_web_weight
         else if (c == flange_tag) then
           w(i) = flange_weight
+          w(i+sz(2)) = v_flange_weight
         else if (c == corner_tag) then
           w(i) = corner_weight
+          w(i+sz(2)) = v_corner_weight
         else if (c == joint_tag) then
           w(i) = joint_weight
+          w(i+sz(2)) = v_joint_weight
         end if
+      end do
+      end function
+C ******************************************************************** C
+C     Calculate the shear factor resultants
+C ******************************************************************** C
+      ! Returns the shear factor resultant for one flange and web
+      ! @ input depth: Section depth
+      ! @ input bf: Section width
+      ! @ input tf: Flange thickness
+      ! @ input tw: Web thickness
+      ! @ returns: The shear resultants
+      !             shears(1) - flange, shears(2) - web
+      pure function shear_factors(depth, bf, tf, tw) result(shears)
+      ! Input and output
+      real(8), intent(in)   ::  depth, bf, tf, tw
+      real(8)               ::  shears(2)
+      ! Internal variables
+      real(8)               ::  d1, d1_2, d1_cl, tau_f_1, tau_w_1, 
+     1                          tau_w_0, y
+      real(8)               ::  two, half, quart
+      parameter                 (two=2.d0, half=0.5d0, quart=0.25d0)
+      ! Function start
+      d1 = depth - two * tf
+      d1_2 = d1 / two
+      d1_cl = depth - tf
+      
+      ! Shear stress factor on flange at y = d1/2
+      tau_f_1 = (half * bf * (half * depth - d1_2) 
+     1           * (half * depth + d1_2)) / bf
+      ! Shear stress factor on web at y = d1/2
+      y = d1_2
+      tau_w_1 = (quart * bf * tf * (depth + d1) 
+     1           + half * tw * (half * d1 - y) * (half * d1 + y)) / tw
+      ! Shear stress factor on web at y = 0
+      y = 0.d0
+      tau_w_0 = (quart * bf * tf * (depth + d1) 
+     1           + half * tw * (half * d1 - y) * (half * d1 + y)) / tw
+      
+      ! Compute the resultants through linear approximation
+      shears(1) = half * tau_f_1 * bf * tf
+      shears(2) = tw * d1_cl * (tau_w_1 + half * (tau_w_0 - tau_w_1))
+      end function
+C ******************************************************************** C
+C     Calculate the shear factor resultants
+C ******************************************************************** C
+      ! Returns the shear factor resultant for one flange and web
+      ! @ input w_all: Area and shear weights, size 2Nx1
+      ! @ input a_total: Total area
+      ! @ input r0: Initial orientation, size 3x3
+      ! @ input r: Rotation from initial to deformed, size 3x3
+      ! @ returns: The displacement factor for each direction for each 
+      !            node, size 3xN
+      pure function calc_disp_lin(n_sh, w_all, a_total, r0, r) 
+     1              result(u_lin)
+      ! Input and output
+      real(8), intent(in)   ::  w_all(:), a_total, r0(:, :), r(:, :)
+      integer, intent(in)   ::  n_sh
+      real(8)               ::  u_lin(3, n_sh)
+      ! Internal variables
+      real(8)               ::  w(3)
+      integer               ::  i   
+      
+      ! Function start
+      do i = 1, n_sh
+        w = [ w_all(i + n_sh), w_all(i) / a_total, w_all(i) / a_total ]
+        u_lin(:, i) = -matmul(r, matmul(r0, w))
       end do
       end function
 C ******************************************************************** C
