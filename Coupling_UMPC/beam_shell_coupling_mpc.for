@@ -18,6 +18,8 @@ C     [1] Hartloper, Lignos and de Sousa (2019), Best-fit Beam-to-shell
 C     Coupling for Wide-flange Cross-sections
 C     [2] Mostafa and Sivaselvan (2014), On best-fit corotated frames 
 C     for 3D continuum finite elements
+C     [3] Horn (1987), Closed-form solution of absolute orientation 
+C     using unit quaternions
 C
 C Written by: A Hartloper, EPFL, alexander.hartloper@epfl.ch
 C 
@@ -752,10 +754,10 @@ C ******************************************************************** C
       joint_weight = flange_weight + 0.5d0 * tw * delta_w
       
       ! Calculate the shear weights
-      width = two * x_max
-      depth = two * y_max + tf
+      width = 2.d0 * x_max
+      depth = 2.d0 * y_max + tf
       v_f_w = shear_factors(depth, width, tf, tw)
-      v_total = two * v_f_w(1) + v_f_w(2)
+      v_total = 2.d0 * v_f_w(1) + v_f_w(2)
       v_prct_f = v_f_w(1) / v_total
       v_prct_w = v_f_w(2) / v_total
       a_web = tw * (depth - tf)
@@ -763,8 +765,8 @@ C ******************************************************************** C
       ! Weight factors
       v_web_weight = web_weight / a_web * v_prct_w
       v_flange_weight = flange_weight / a_flange * v_prct_f
-      v_corner_weight = 0.5 * v_flange_weight
-      v_joint_weight = v_flange_weight + 0.5 * v_web_weight
+      v_corner_weight = 0.5d0 * v_flange_weight
+      v_joint_weight = v_flange_weight + 0.5d0 * v_web_weight
       
       ! Assign weights
       do i = 1, sz(2)
@@ -846,7 +848,7 @@ C ******************************************************************** C
       
       ! Function start
       do i = 1, n_sh
-        w = [ w_all(i + n_sh), w_all(i) / a_total, w_all(i) / a_total ]
+        w = [ w_all(i) / a_total, w_all(i + n_sh), w_all(i) / a_total ]
         u_lin(:, i) = -matmul(r, matmul(r0, w))
       end do
       end function
