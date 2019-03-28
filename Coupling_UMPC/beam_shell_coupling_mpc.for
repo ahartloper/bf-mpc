@@ -655,6 +655,9 @@ C ******************************************************************** C
      1                          pt(3), x_max_2, y_max_2
       integer               ::  i, sz(2), d_digits, d, n_digits, c,
      1                          tf_tw
+      ! For weak axis shear
+      real(8)               ::  x11, tau_f_x, tau_w_x, tau_w_x_0, v_f_w,
+     1                          v_w_w, v_total_w
       ! Allocate arrays
       sz = shape(p)
       allocate(w(sz(2)))
@@ -737,6 +740,18 @@ C ******************************************************************** C
       corner_weight = 0.5 * flange_weight
       joint_weight = flange_weight + 0.5 * tw * delta_w
       
+      ! Weak axis shear
+      x11 = tw / 2.
+      tau_f_x = tf/8. * (bf ** 2 - 4. * x11 ** 2)
+      tau_w_x = 2. * tau_f_x + depth/8. * (tw ** 2 - 4.*x11 ** 2)
+      x11 = 0.
+      tau_w_x_0= 2. * tau_f_x + depth/8. * (tw ** 2 - 4.*x11 ** 2)
+      ! Shear resultant for the flange and web in the weak axis
+      v_f_w = 0.5 * (bf/2. - tw/2.) * tf * tau_f_x
+      v_w_w = tw * depth * tau_w_x + depth * tw * 0.5 * (tau_w_x_0 -
+     1        tau_w_x)
+      v_total_w = 2. * v_f_w + v_w_w
+
       ! Assign weights
       do i = 1, sz(2)
         c = classification(i)
