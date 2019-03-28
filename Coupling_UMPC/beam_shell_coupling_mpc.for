@@ -84,8 +84,8 @@ C Subroutine definition
 C ******************************************************************** C
       ! Calculate the centroid locations
       ! The first node is the beam node, the shell nodes follow
-      x_shell = x(:, 2:n)
-      u_shell = u(:, 2:n)
+      x_shell = x(1:3, 2:n)
+      u_shell = u(1:3, 2:n)
       x_shell_def = x_shell + u_shell
       xc0(:) = zero
       xc(:) = zero
@@ -516,26 +516,28 @@ C ******************************************************************** C
 C     Calculate the warping amplitude
 C ******************************************************************** C
       ! Returns the warping amplitude.
-      ! @ input x_def: x of each node in the deformed configuration
       ! @ input x_ref: x of each node in the reference configuration
+      ! @ input x_def: x of each node in the deformed configuration
       ! @ input u_c: Translation of the centroid
       ! @ input t: Orientation of the normal to the cross-section
       ! @ input r: Optimal rotation matrix
       ! @ input psi: Warping function at each node
       ! @ returns w: Warping amplitude
-      pure function warp_amp(x_def, x_ref, u_c, t, r, psi) result(w)
+      pure function warp_amp(x_ref, x_def, u_c, t, r, psi) result(w)
       ! Input and output
       real(8), intent(in) ::  x_def(:, :), x_ref(:, :), u_c(3), t(3)
       real(8), intent(in) ::  r(3, 3), psi(:)
       real(8)             ::  w
       ! Internal
       integer             :: i, non_zero_nodes, sz(2)
+      real(8)             :: zero_tol
+      parameter              (zero_tol=1.d-6)
       ! Function start
       sz = shape(x_def)
       w = 0.d0
       non_zero_nodes = 0
       do i = 1, sz(2)
-        if (psi(i) /= 0.d0) then
+        if (abs(psi(i)) > zero_tol) then
           non_zero_nodes = non_zero_nodes + 1
           w = w + 1.d0 / psi(i) 
      1       *dot_product(t, x_def(:, i) - matmul(r, x_ref(:, i) + u_c))
@@ -564,11 +566,13 @@ C ******************************************************************** C
       real(8), intent(in)   ::  g(:, :), we(:)
       real(8), allocatable  ::  w_lin(:)
       ! Internal
-      integer               ::  sz(2), i, j, num_nodes, num_psi_non_zero
+      integer               ::  sz(2), i, j, num_nodes
       real(8)               ::  drdx_rs(3, 3), t(3), we_total
       real(8), allocatable  ::  drdx(:, :)
       real(8)               ::  zero, one, two
       parameter                 (zero = 0.d0, one = 1.d0, two = 2.d0)
+      real(8)               ::  zero_tol
+      parameter                 (zero_tol=1.d-6)
       ! Allocate arrays
       ! Number of columns in G should be 3 * num_nodes
       sz = shape(g)
@@ -576,28 +580,16 @@ C ******************************************************************** C
       allocate(w_lin(sz(2)))
       allocate(drdx(9, sz(2)))
       ! Calculate the derivative of R
-      drdx = matmul(-skew_mat(r), g)
+      !drdx = matmul(-skew_mat(r), g)
       ! Assemble the linearized warping vector
       t = matmul(r, t0)
       w_lin(:) = zero
-      ! todo: is the first term always sum to zero?
-      ! Compute the first term
-!      do i = 1, sz(2)
-!        drdx_rs = vec2mat_9(drdx(:, i))
-!        do j = 1, num_nodes
-!          if (psi(j) /= zero) then
-!            w_lin(i) = w_lin(i) 
-!     1      - dot_product(t0, matmul(drdx_rs, x_def(:, j))) / psi(j)
-!          end if
-!        end do
-!      end do
       ! Compute second term
       num_psi_non_zero = 0
       we_total = zero
       do i = 1, num_nodes
-        if (psi(i) /= zero) then
+        if (abs(psi(i)) > zero_tol) then
           we_total = we_total + we(i)
-          !num_psi_non_zero = num_psi_non_zero + 1
           w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) + t / psi(i) * we(i)
         end if
       end do
@@ -671,10 +663,14 @@ C ******************************************************************** C
       real(8) ::  width, depth, v_f_w(2), v_total, v_prct_f, v_prct_w, 
      1 a_web, a_flange, v_web_height, v_flange_weight, v_corner_weight, 
      2 v_joint_weight
+      ! Tolerance in positions
+      real(8) :: zero_tol
+      parameter(zero_tol=1.d-3)
       ! Allocate arrays
       sz = shape(p)
       allocate(w(2 * sz(2)))
       allocate(classification(sz(2)))
+      
       ! Function start
       ! Classify the points
       classification(:) = 0
@@ -682,16 +678,16 @@ C ******************************************************************** C
       y_max = maxval(p(2, :))
       do i = 1, sz(2)
         pt = p(:, i)
-        if (pt(1) == 0.d0) then
+        if (abs(pt(1)) < zero_tol) then
           ! Point is on the web
           classification(i) = web_tag
         end if
-        if (abs(pt(2)) == y_max) then
+        if (abs(abs(pt(2)) - y_max) < zero_tol) then
           ! Point is on the flange
           if (classification(i) == web_tag) then
             ! Point is on the web and flange
             classification(i) = joint_tag;
-          else if (abs(pt(1)) == x_max) then
+          else if (abs(abs(pt(1)) - x_max) < zero_tol) then
             ! Point is on the corner of the flange
             classification(i) = corner_tag
           else
