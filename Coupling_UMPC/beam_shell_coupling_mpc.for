@@ -135,7 +135,7 @@ C ******************************************************************** C
       
       ! Compute the warping amplitude
       psi_all = warp_fun(c_mat, r_ref)
-      t_def(:) = matmul(r_mat, r_ref(:, 3))
+      t_def = matmul(r_mat, r_ref(:, 3))
       w_amp = warp_amp(x_shell, x_shell_def, u_cent, t_def, r_mat,
      1                 psi_all)
      
@@ -155,15 +155,15 @@ C ******************************************************************** C
         ! Index corresponding to the shell nodes
         i_sh = i - 1
         ! Displacement constraints
-        a(1, 1, i) = disp_lin(1, i_sh)
-        a(2, 2, i) = disp_lin(2, i_sh)
-        a(3, 3, i) = disp_lin(3, i_sh)
+        a(1, 1, i) = -disp_lin(1, i_sh)
+        a(2, 2, i) = -disp_lin(2, i_sh)
+        a(3, 3, i) = -disp_lin(3, i_sh)
         ! Rotation constraints
         a(4, 1:3, i) = -q_mat(1, 3*i_sh-2:3*i_sh) * weights(i_sh)
         a(5, 1:3, i) = -q_mat(2, 3*i_sh-2:3*i_sh) * weights(i_sh)
         a(6, 1:3, i) = -q_mat(3, 3*i_sh-2:3*i_sh) * weights(i_sh)
         ! Warping constraint
-        a(7, 1:3, i) = w_lin(3*i_sh-2:3*i_sh) 
+        a(7, 1:3, i) = -w_lin(3*i_sh-2:3*i_sh)
         ! Set the active DOF (displacement) in the shell elements
         jdof(1, i) = 1
         jdof(2, i) = 2
@@ -373,7 +373,7 @@ C ******************************************************************** C
       ! Returns the linearization of the optimal rotation vector
       ! @ input q: Optimal rotation quaternion
       ! @ input g: Instantaneous rotation matrix
-      ! @ returns qq: Linearized rotation vector
+      ! @ returns qq: Linearized rotation matrix
       pure function calc_q(q, g) result(qq)
       ! Input and output
       real(8), intent(in)   ::  q(4), g(:, :)
@@ -428,7 +428,7 @@ C ******************************************************************** C
 C     Compute reference configuration
 C ******************************************************************** C
       ! Returns the right-hand ordered reference configuration
-      ! @ input ref_pts: x, y, z coordinates of each point
+      ! @ input ref_pts: initial [x, y, z] coordinates of each point
       ! @ returns o: Orientation of the reference configuration that is 
       !              a valid right-handed coordinate system.
       function ini_config(ref_pts) result(o)
@@ -476,7 +476,12 @@ C ******************************************************************** C
       ! Returns the warping function evaluated at each node.
       ! @ input c: Location of nodes in reference config. relative to 
       !            centroid.
-      ! @ returns psi: Warping function each node.
+      ! @ input r0: Rotation from reference to initial configuration
+      ! @ returns psi: Warping function at each node.
+      !
+      ! Notes:
+      !   - If the distance between adjacent nodes is less than 1e-8
+      !   then nodes on the web can be incorrectly identified
       pure function warp_fun(c, r0) result(psi)
       ! Input and output
       real(8), intent(in)   :: c(:, :), r0(3, 3)
@@ -515,12 +520,12 @@ C ******************************************************************** C
 C ******************************************************************** C
 C     Calculate the warping amplitude
 C ******************************************************************** C
-      ! Returns the warping amplitude.
-      ! @ input x_ref: x of each node in the reference configuration
-      ! @ input x_def: x of each node in the deformed configuration
+      ! Returns the value of the warping amplitude.
+      ! @ input x_ref: pos. of each node in the initial configuration
+      ! @ input x_def: pos. of each node in the deformed configuration
       ! @ input u_c: Translation of the centroid
       ! @ input t: Orientation of the normal to the cross-section
-      ! @ input r: Optimal rotation matrix
+      ! @ input r: Rotation from initial to deformed configurations
       ! @ input psi: Warping function at each node
       ! @ returns w: Warping amplitude
       pure function warp_amp(x_ref, x_def, u_c, t, r, psi) result(w)
@@ -539,8 +544,7 @@ C ******************************************************************** C
       do i = 1, sz(2)
         if (abs(psi(i)) > zero_tol) then
           non_zero_nodes = non_zero_nodes + 1
-          w = w + 1.d0 / psi(i) 
-     1       *dot_product(t, x_def(:, i) - matmul(r, x_ref(:, i) + u_c))
+          w=w-dot_product(t,x_def(:,i)-matmul(r,x_ref(:, i)+u_c))/psi(i)
         end if
       end do
       w = w / non_zero_nodes
@@ -549,16 +553,18 @@ C ******************************************************************** C
 C     Compute the linearized warping vector
 C ******************************************************************** C
       ! Returns the linearized warping vector.
-      ! @ input x1: x at s = 0 in the deformed configuration
-      ! @ input x1_ref: x at s = 0 in the reference configuration
-      ! @ input u_c: Translation of the centroid
+      ! @ input x_def: pos. of nodes in deformed configuration
       ! @ input t0: Orientation of the normal to the cross-section in  
       !             the reference configuration
-      ! @ input psi: Warping function at s = 0
-      ! @ input r: Optimal rotation matrix
+      ! @ input psi: Warping function for all the nodes
+      ! @ input r: Rotation from initial to deformed configuration
       ! @ input g: Instantaneous rotation matrix
-      ! @ input we: Weight value for each node
+      ! @ input we: Area weight value for each node
       ! @ returns w_lin: Linearization of warping amplitude w.r.t x
+      !
+      ! Notes:
+      !   - we containts the area weights for each node, then the shear
+      !   weights for each node, only use the first set
       pure function calc_w_weighted(x_def, t0, psi, r, g, we) 
      1              result(w_lin)
       ! Input and output
@@ -590,7 +596,7 @@ C ******************************************************************** C
       do i = 1, num_nodes
         if (abs(psi(i)) > zero_tol) then
           we_total = we_total + we(i)
-          w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) + t / psi(i) * we(i)
+          w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) - t / psi(i) * we(i)
         end if
       end do
       ! Compute the average from all the sums for the two terms
@@ -603,6 +609,7 @@ C ******************************************************************** C
       ! Returns the rotation vector extracted from the quaternion
       ! @ input q: Rotation quaternion
       ! @ returns phi: Euler angle representation of q
+      !
       ! From Abaqus Theory Guide 1.3.1
       pure function extract_rotation(q) result(phi)
       ! Input and output
@@ -791,7 +798,8 @@ C ******************************************************************** C
       ! @ input tf: Flange thickness
       ! @ input tw: Web thickness
       ! @ returns: The shear resultants
-      !             shears(1) - flange, shears(2) - web
+      !             shears(1): flange
+      !             shears(2): web
       pure function shear_factors(depth, bf, tf, tw) result(shears)
       ! Input and output
       real(8), intent(in)   ::  depth, bf, tf, tw
@@ -823,9 +831,9 @@ C ******************************************************************** C
       shears(2) = tw * d1_cl * (tau_w_1 + half * (tau_w_0 - tau_w_1))
       end function
 C ******************************************************************** C
-C     Calculate the shear factor resultants
+C     Calculate the linearized displacement matrix
 C ******************************************************************** C
-      ! Returns the shear factor resultant for one flange and web
+      ! Returns the matrix relating centroidal disp. to shell disps.
       ! @ input w_all: Area and shear weights, size 2Nx1
       ! @ input a_total: Total area
       ! @ input r0: Initial orientation, size 3x3
@@ -845,7 +853,7 @@ C ******************************************************************** C
       ! Function start
       do i = 1, n_sh
         w = [ w_all(i) / a_total, w_all(i + n_sh), w_all(i) / a_total ]
-        u_lin(:, i) = -matmul(r, matmul(r0, w))
+        u_lin(:, i) = matmul(r, matmul(r0, w))
       end do
       end function
 C ******************************************************************** C
