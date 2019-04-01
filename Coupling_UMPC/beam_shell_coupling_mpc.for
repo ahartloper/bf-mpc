@@ -667,15 +667,15 @@ C ******************************************************************** C
       integer               ::  i, sz(2), d_digits, deci, n_digits, c,
      1                          tf_tw
       ! For shear weights
-      real(8) ::  width, depth, v_f_w(2), v_total, v_prct_f, v_prct_w, 
-     1 a_web, a_flange, v_web_height, v_flange_weight, v_corner_weight, 
-     2 v_joint_weight
+      real(8) ::  width, depth, v_f_w(4), v_total, v_prct_f, v_prct_w, 
+     1 a_web, a_flange
+      real(8) ::  v_s_web_weight, v_s_flange_weight, v_s_corner_weight, 
+     1 v_s_joint_weight 
+      real(8) ::  v_w_web_weight, v_w_flange_weight, v_w_corner_weight, 
+     1 v_w_joint_weight
       ! Tolerance in positions
       real(8) :: zero_tol
       parameter(zero_tol=1.d-3)
-      ! For weak axis shear
-      real(8)               ::  x11, tau_f_x, tau_w_x, tau_w_x_0, v_f_w,
-     1                          v_w_w, v_total_w
       ! Allocate arrays
       sz = shape(p)
       allocate(w(2 * sz(2)))
@@ -763,49 +763,49 @@ C ******************************************************************** C
       width = 2.d0 * x_max
       depth = 2.d0 * y_max + tf
       v_f_w = shear_factors(depth, width, tf, tw)
+      a_web = tw * (depth - tf)
+      a_flange = tf * width
+      ! Weight factors for the strong axis
       v_total = 2.d0 * v_f_w(1) + v_f_w(2)
       v_prct_f = v_f_w(1) / v_total
       v_prct_w = v_f_w(2) / v_total
-      a_web = tw * (depth - tf)
-      a_flange = tf * width
-      ! Weight factors
-      v_web_weight = web_weight / a_web * v_prct_w
-      v_flange_weight = flange_weight / a_flange * v_prct_f
-      v_corner_weight = 0.5d0 * v_flange_weight
-      v_joint_weight = v_flange_weight + 0.5d0 * v_web_weight
-      
-      ! Weak axis shear
-      x11 = tw / 2.
-      tau_f_x = tf/8. * (bf ** 2 - 4. * x11 ** 2)
-      tau_w_x = 2. * tau_f_x + depth/8. * (tw ** 2 - 4.*x11 ** 2)
-      x11 = 0.
-      tau_w_x_0= 2. * tau_f_x + depth/8. * (tw ** 2 - 4.*x11 ** 2)
-      ! Shear resultant for the flange and web in the weak axis
-      v_f_w = 0.5 * (bf/2. - tw/2.) * tf * tau_f_x
-      v_w_w = tw * depth * tau_w_x + depth * tw * 0.5 * (tau_w_x_0 -
-     1        tau_w_x)
-      v_total_w = 2. * v_f_w + v_w_w
+      v_s_web_weight = web_weight / a_web * v_prct_w
+      v_s_flange_weight = flange_weight / a_flange * v_prct_f
+      v_s_corner_weight = 0.5d0 * v_flange_weight
+      v_s_joint_weight = v_flange_weight + 0.5d0 * v_web_weight
+      ! Weight factors for the weak axis
+      v_total = 2.d0 * v_f_w(3) + v_f_w(4)
+      v_prct_f = v_f_w(3) / v_total
+      v_prct_w = v_f_w(4) / v_total
+      v_w_web_weight = web_weight / a_web * v_prct_w
+      v_w_flange_weight = flange_weight / a_flange * v_prct_f
+      v_w_corner_weight = 0.5d0 * v_flange_weight
+      v_w_joint_weight = v_flange_weight + 0.5d0 * v_web_weight
 
       ! Assign weights
       do i = 1, sz(2)
         c = classification(i)
         if (c == web_tag) then
           w(i) = web_weight
-          w(i+sz(2)) = v_web_weight
+          w(i+sz(2)) = v_s_web_weight
+          w(i+2*sz(2)) = v_w_web_weight
         else if (c == flange_tag) then
           w(i) = flange_weight
-          w(i+sz(2)) = v_flange_weight
+          w(i+sz(2)) = v_s_flange_weight
+          w(i+2*sz(2)) = v_w_flange_weight
         else if (c == corner_tag) then
           w(i) = corner_weight
-          w(i+sz(2)) = v_corner_weight
+          w(i+sz(2)) = v_s_corner_weight
+          w(i+2*sz(2)) = v_w_corner_weight
         else if (c == joint_tag) then
           w(i) = joint_weight
-          w(i+sz(2)) = v_joint_weight
+          w(i+sz(2)) = v_s_joint_weight
+          w(i+2*sz(2)) = v_w_joint_weight
         end if
       end do
       end function
 C ******************************************************************** C
-C     Calculate the shear factor resultants
+C     Calculate the shear factor resultants for the strong and weak axes
 C ******************************************************************** C
       ! Returns the shear factor resultant for one flange and web
       ! @ input depth: Section depth
@@ -813,22 +813,26 @@ C ******************************************************************** C
       ! @ input tf: Flange thickness
       ! @ input tw: Web thickness
       ! @ returns: The shear resultants
-      !             shears(1): flange
-      !             shears(2): web
+      !             shears(1): strong axis flange
+      !             shears(2): strong axis web
+      !             shears(3): weak axis flange
+      !             shears(4): weak axis web
       pure function shear_factors(depth, bf, tf, tw) result(shears)
       ! Input and output
       real(8), intent(in)   ::  depth, bf, tf, tw
-      real(8)               ::  shears(2)
+      real(8)               ::  shears(4)
       ! Internal variables
       real(8)               ::  d1, d1_2, d1_cl, tau_f_1, tau_w_1, 
      1                          tau_w_0, y
       real(8)               ::  two, half, quart
-      parameter                 (two=2.d0, half=0.5d0, quart=0.25d0)
+      parameter                 (two=2.d0, four=4.d0, half=0.5d0, 
+     1                           quart=0.25d0, zero=0.d0)
       ! Function start
       d1 = depth - two * tf
       d1_2 = d1 / two
       d1_cl = depth - tf
       
+      ! Strong axis
       ! Shear stress factor on flange at y = d1/2
       tau_f_1 = (half * bf * (half * depth - d1_2) 
      1           * (half * depth + d1_2)) / bf
@@ -837,19 +841,34 @@ C ******************************************************************** C
       tau_w_1 = (quart * bf * tf * (depth + d1) 
      1           + half * tw * (half * d1 - y) * (half * d1 + y)) / tw
       ! Shear stress factor on web at y = 0
-      y = 0.d0
+      y = zero
       tau_w_0 = (quart * bf * tf * (depth + d1) 
      1           + half * tw * (half * d1 - y) * (half * d1 + y)) / tw
       
       ! Compute the resultants through linear approximation
       shears(1) = half * tau_f_1 * bf * tf
       shears(2) = tw * d1_cl * (tau_w_1 + half * (tau_w_0 - tau_w_1))
+      
+      ! Weak axis
+      ! Shear stress factor on flange at x = tw/2
+      x11 = tw / two
+      tau_f_1 = tf/8. * (bf ** 2 - four * x11 ** 2)
+      ! Shear stress factor on web at x = tw / 2
+      tau_w_1 = two * tau_f_1 + depth/8. * (tw ** 2 - four*x11 ** 2)
+      ! Shear stress factor on web at x = 0
+      x11 = zero
+      tau_w_0= two * tau_f_x + depth/8. * (tw ** 2 - four*x11 ** 2)
+      ! Shear resultants for the flange and web in the weak axis
+      shears(3) = half * (bf/two - tw/two) * tf * tau_f_1
+      shears(4) = tw * depth * tau_w_x 
+     1            + depth * tw * half * (tau_w_0 - tau_w_1)
+      
       end function
 C ******************************************************************** C
 C     Calculate the linearized displacement matrix
 C ******************************************************************** C
       ! Returns the matrix relating centroidal disp. to shell disps.
-      ! @ input w_all: Area and shear weights, size 2Nx1
+      ! @ input w_all: Area and shear weights, size 3Nx1
       ! @ input a_total: Total area
       ! @ input r0: Initial orientation, size 3x3
       ! @ input r: Rotation from initial to deformed, size 3x3
@@ -867,7 +886,7 @@ C ******************************************************************** C
       
       ! Function start
       do i = 1, n_sh
-        w = [ w_all(i) / a_total, w_all(i + n_sh), w_all(i) / a_total ]
+        w = [ w_all(i + 2*n_sh), w_all(i + n_sh), w_all(i) / a_total ]
         u_lin(:, i) = matmul(r, matmul(r0, w))
       end do
       end function
