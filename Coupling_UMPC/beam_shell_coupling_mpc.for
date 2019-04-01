@@ -673,6 +673,9 @@ C ******************************************************************** C
       ! Tolerance in positions
       real(8) :: zero_tol
       parameter(zero_tol=1.d-3)
+      ! For weak axis shear
+      real(8)               ::  x11, tau_f_x, tau_w_x, tau_w_x_0, v_f_w,
+     1                          v_w_w, v_total_w
       ! Allocate arrays
       sz = shape(p)
       allocate(w(2 * sz(2)))
@@ -771,6 +774,18 @@ C ******************************************************************** C
       v_corner_weight = 0.5d0 * v_flange_weight
       v_joint_weight = v_flange_weight + 0.5d0 * v_web_weight
       
+      ! Weak axis shear
+      x11 = tw / 2.
+      tau_f_x = tf/8. * (bf ** 2 - 4. * x11 ** 2)
+      tau_w_x = 2. * tau_f_x + depth/8. * (tw ** 2 - 4.*x11 ** 2)
+      x11 = 0.
+      tau_w_x_0= 2. * tau_f_x + depth/8. * (tw ** 2 - 4.*x11 ** 2)
+      ! Shear resultant for the flange and web in the weak axis
+      v_f_w = 0.5 * (bf/2. - tw/2.) * tf * tau_f_x
+      v_w_w = tw * depth * tau_w_x + depth * tw * 0.5 * (tau_w_x_0 -
+     1        tau_w_x)
+      v_total_w = 2. * v_f_w + v_w_w
+
       ! Assign weights
       do i = 1, sz(2)
         c = classification(i)
