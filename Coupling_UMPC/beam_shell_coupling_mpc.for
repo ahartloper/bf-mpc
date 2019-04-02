@@ -867,7 +867,7 @@ C ******************************************************************** C
 C     Calculate the linearized displacement matrix
 C ******************************************************************** C
       ! Returns the matrix relating centroidal disp. to shell disps.
-      ! @ input w_all: Area and shear weights, size 3Nx1
+      ! @ input w_all: Area and shear weights, size 3xN
       ! @ input a_total: Total area
       ! @ input r0: Initial orientation, size 3x3
       ! @ input r: Rotation from initial to deformed, size 3x3
@@ -876,17 +876,23 @@ C ******************************************************************** C
       pure function calc_disp_lin(n_sh, w_all, a_total, r0, r) 
      1              result(u_lin)
       ! Input and output
-      real(8), intent(in)   ::  w_all(:, :), a_total, r0(:, :), r(:, :)
+      real(8), intent(in)   ::  w_all(3, n_sh), a_total,r0(3, 3),r(3, 3)
       integer, intent(in)   ::  n_sh
       real(8)               ::  u_lin(3, n_sh)
       ! Internal variables
-      real(8)               ::  w(3)
+      real(8)               ::  we(3, 3)
       integer               ::  i   
       
       ! Function start
       do i = 1, n_sh
-        w = [ w_all(3, i), w_all(2, i), w_all(1, i) / a_total ]
-        u_lin(:, i) = matmul(r0, w)
+        we = 0.d0
+        we(1, 1) = w_all(3, i)
+        we(2, 2) = w_all(2, i)
+        we(3, 3) = w_all(1, i) / a_total
+        we = matmul(r, matmul(r0, we))
+        u_lin(1, i) = norm2(we(1, :))
+        u_lin(2, i) = norm2(we(2, :))
+        u_lin(3, i) = norm2(we(3, :))
       end do
       end function
 C ******************************************************************** C
