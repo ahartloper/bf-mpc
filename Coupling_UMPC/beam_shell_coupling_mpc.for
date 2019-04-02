@@ -506,11 +506,11 @@ C ******************************************************************** C
         if (abs(c2(2, i) - s2 / two ) < tol) then
           ! Node is on the top flange
           s = c2(1, i) + s1 / two
-          psi(i) = s2 * (s1 - two * s) / four
+          psi(i) = -s2 * (s1 - two * s) / four
         else if (abs(c2(2, i) + s2 / two ) < tol) then
           ! Node is on the bottom flange
           s = c2(1, i) + s1 / two
-          psi(i) = -s2 * (s1 - two * s) / four
+          psi(i) = s2 * (s1 - two * s) / four
         else
           ! Node is on the web line
           psi(i) = 0.d0
@@ -544,7 +544,7 @@ C ******************************************************************** C
       do i = 1, sz(2)
         if (abs(psi(i)) > zero_tol) then
           non_zero_nodes = non_zero_nodes + 1
-          w=w-dot_product(t,x_def(:,i)-matmul(r,x_ref(:, i)+u_c))/psi(i)
+          w=w+dot_product(t,x_def(:,i)-matmul(r,x_ref(:, i)+u_c))/psi(i)
         end if
       end do
       w = w / non_zero_nodes
@@ -596,7 +596,7 @@ C ******************************************************************** C
       do i = 1, num_nodes
         if (abs(psi(i)) > zero_tol) then
           we_total = we_total + we(i)
-          w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) - t / psi(i) * we(i)
+          w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) + t / psi(i) * we(i)
         end if
       end do
       ! Compute the average from all the sums for the two terms
