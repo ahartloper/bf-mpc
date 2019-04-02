@@ -54,7 +54,7 @@ C
       real(8), allocatable  :: c_mat(:, :), d_mat(:, :), g_mat(:, :), 
      1                         q_mat(:, :), x_shell_def(:, :),
      2                         x_shell(:, :), u_shell(:, :), 
-     3                         w_lin(:), psi_all(:), weights(:)
+     3                         w_lin(:), psi_all(:), weights(:, :)
       ! For the rotation quaternion and computations
       real(8)               :: b_mat(quatdim, quatdim), 
      1                         beta(quatdim, quatdim)
@@ -77,7 +77,7 @@ C
       allocate(q_mat(ndim, ndim * n_shell))
       allocate(psi_all(n_shell))
       allocate(w_lin(ndim * n_shell))
-      allocate(weights(2 * n_shell))
+      allocate(weights(ndim, n_shell))
       allocate(disp_lin(ndim, n_shell))
 C ******************************************************************** C
 C Subroutine definition
@@ -113,14 +113,14 @@ C ******************************************************************** C
       weights = calc_weights(matmul(transpose(r_ref), c_mat), jtype)
       total_weight = zero
       do i = 1, n_shell
-        total_weight = total_weight + weights(i)
+        total_weight = total_weight + weights(1, i)
       end do
       
       ! Compute the optimal rotation quaternion
       b_mat(:, :) = zero
       do i = 1, n_shell
         beta = left_quat(zero,d_mat(:, i))- right_quat(zero,c_mat(:, i))
-        b_mat = b_mat + weights(i) * matmul(transpose(beta), beta)
+        b_mat = b_mat + weights(1, i) * matmul(transpose(beta), beta)
       end do
       lam_q = calc_opquat(b_mat)
       lambda = lam_q(1)
@@ -141,7 +141,7 @@ C ******************************************************************** C
      
       ! Compute the linearized warping
       w_lin = calc_w_weighted(x_shell_def, r_ref(:, 3), psi_all, r_mat, 
-     1                        g_mat, weights)
+     1                        g_mat, weights(1, :))
       
       ! Compute the linearized centroid displacement
       disp_lin = calc_disp_lin(n_shell, weights, total_weight, r_ref, 
@@ -159,9 +159,9 @@ C ******************************************************************** C
         a(2, 2, i) = -disp_lin(2, i_sh)
         a(3, 3, i) = -disp_lin(3, i_sh)
         ! Rotation constraints
-        a(4, 1:3, i) = -q_mat(1, 3*i_sh-2:3*i_sh) * weights(i_sh)
-        a(5, 1:3, i) = -q_mat(2, 3*i_sh-2:3*i_sh) * weights(i_sh)
-        a(6, 1:3, i) = -q_mat(3, 3*i_sh-2:3*i_sh) * weights(i_sh)
+        a(4, 1:3, i) = -q_mat(1, 3*i_sh-2:3*i_sh) * weights(1, i_sh)
+        a(5, 1:3, i) = -q_mat(2, 3*i_sh-2:3*i_sh) * weights(1, i_sh)
+        a(6, 1:3, i) = -q_mat(3, 3*i_sh-2:3*i_sh) * weights(1, i_sh)
         ! Warping constraint
         a(7, 1:3, i) = -w_lin(3*i_sh-2:3*i_sh)
         ! Set the active DOF (displacement) in the shell elements
@@ -645,13 +645,12 @@ C ******************************************************************** C
       !   - The weights are only valid if the interface is elastic
       !   - The flange and web mesh distances are assumed to be constant
       !     between nodes
-      !   - The first N values of w are the area weights, the next N
-      !     values are the shear weights for the x-axis
-      pure function calc_weights(p, tf_tw_code) result(w)
+      !   - The first row is the area weights, then strong axis, then weak
+      function calc_weights(p, tf_tw_code) result(w)
       ! Input and output
       real(8), intent(in)   ::  p(:, :)
       integer, intent(in)   ::  tf_tw_code
-      real(8), allocatable  ::  w(:)
+      real(8), allocatable  ::  w(:, :)
       ! Internal variables
       ! Tags for node positions
       integer               ::  web_tag, flange_tag, corner_tag, 
@@ -678,7 +677,7 @@ C ******************************************************************** C
       parameter(zero_tol=1.d-3)
       ! Allocate arrays
       sz = shape(p)
-      allocate(w(2 * sz(2)))
+      allocate(w(3, sz(2)))
       allocate(classification(sz(2)))
       
       ! Function start
@@ -771,36 +770,36 @@ C ******************************************************************** C
       v_prct_w = v_f_w(2) / v_total
       v_s_web_weight = web_weight / a_web * v_prct_w
       v_s_flange_weight = flange_weight / a_flange * v_prct_f
-      v_s_corner_weight = 0.5d0 * v_flange_weight
-      v_s_joint_weight = v_flange_weight + 0.5d0 * v_web_weight
+      v_s_corner_weight = 0.5d0 * v_s_flange_weight
+      v_s_joint_weight = v_s_flange_weight + 0.5d0 * v_s_web_weight
       ! Weight factors for the weak axis
       v_total = 2.d0 * v_f_w(3) + v_f_w(4)
       v_prct_f = v_f_w(3) / v_total
       v_prct_w = v_f_w(4) / v_total
       v_w_web_weight = web_weight / a_web * v_prct_w
       v_w_flange_weight = flange_weight / a_flange * v_prct_f
-      v_w_corner_weight = 0.5d0 * v_flange_weight
-      v_w_joint_weight = v_flange_weight + 0.5d0 * v_web_weight
-
+      v_w_corner_weight = 0.5d0 * v_w_flange_weight
+      v_w_joint_weight = v_w_flange_weight + 0.5d0 * v_w_web_weight
+            
       ! Assign weights
       do i = 1, sz(2)
         c = classification(i)
         if (c == web_tag) then
-          w(i) = web_weight
-          w(i+sz(2)) = v_s_web_weight
-          w(i+2*sz(2)) = v_w_web_weight
+          w(1, i) = web_weight
+          w(2, i) = v_s_web_weight
+          w(3, i) = v_w_web_weight
         else if (c == flange_tag) then
-          w(i) = flange_weight
-          w(i+sz(2)) = v_s_flange_weight
-          w(i+2*sz(2)) = v_w_flange_weight
+          w(1, i) = flange_weight
+          w(2, i) = v_s_flange_weight
+          w(3, i) = v_w_flange_weight
         else if (c == corner_tag) then
-          w(i) = corner_weight
-          w(i+sz(2)) = v_s_corner_weight
-          w(i+2*sz(2)) = v_w_corner_weight
+          w(1, i) = corner_weight
+          w(2, i) = v_s_corner_weight
+          w(3, i) = v_w_corner_weight
         else if (c == joint_tag) then
-          w(i) = joint_weight
-          w(i+sz(2)) = v_s_joint_weight
-          w(i+2*sz(2)) = v_w_joint_weight
+          w(1, i) = joint_weight
+          w(2, i) = v_s_joint_weight
+          w(3, i) = v_w_joint_weight
         end if
       end do
       end function
@@ -852,15 +851,15 @@ C ******************************************************************** C
       ! Weak axis
       ! Shear stress factor on flange at x = tw/2
       x11 = tw / two
-      tau_f_1 = tf/8. * (bf ** 2 - four * x11 ** 2)
+      tau_f_1 = (bf ** 2 - four * x11 ** 2) / 8.d0
       ! Shear stress factor on web at x = tw / 2
-      tau_w_1 = two * tau_f_1 + depth/8. * (tw ** 2 - four*x11 ** 2)
+      tau_w_1 =(two * tau_f_1 + depth/8. * (tw ** 2 - four*x11 ** 2))/d1
       ! Shear stress factor on web at x = 0
       x11 = zero
-      tau_w_0= two * tau_f_x + depth/8. * (tw ** 2 - four*x11 ** 2)
+      tau_w_0= (two * tau_f_1 + depth/8. * tw ** 2)/d1
       ! Shear resultants for the flange and web in the weak axis
-      shears(3) = half * (bf/two - tw/two) * tf * tau_f_1
-      shears(4) = tw * depth * tau_w_x 
+      shears(3) = quart * (bf - tw) * tf * tau_f_1
+      shears(4) = tw * depth * tau_w_0 
      1            + depth * tw * half * (tau_w_0 - tau_w_1)
       
       end function
@@ -877,7 +876,7 @@ C ******************************************************************** C
       pure function calc_disp_lin(n_sh, w_all, a_total, r0, r) 
      1              result(u_lin)
       ! Input and output
-      real(8), intent(in)   ::  w_all(:), a_total, r0(:, :), r(:, :)
+      real(8), intent(in)   ::  w_all(:, :), a_total, r0(:, :), r(:, :)
       integer, intent(in)   ::  n_sh
       real(8)               ::  u_lin(3, n_sh)
       ! Internal variables
@@ -886,8 +885,8 @@ C ******************************************************************** C
       
       ! Function start
       do i = 1, n_sh
-        w = [ w_all(i + 2*n_sh), w_all(i + n_sh), w_all(i) / a_total ]
-        u_lin(:, i) = matmul(r, matmul(r0, w))
+        w = [ w_all(3, i), w_all(2, i), w_all(1, i) / a_total ]
+        u_lin(:, i) = matmul(r0, w)
       end do
       end function
 C ******************************************************************** C
