@@ -103,14 +103,15 @@ C ******************************************************************** C
         c_mat(:, i) = x_shell(:, i) - xc0
         d_mat(:, i) = x_shell_def(:, i) - xc
       end do
-      r_ref = ini_config(c_mat)
+      r_ref = ini_config(c_mat, n_shell)
       
       ! Calculate the nodal weights
       ! The centroid does not depend on the weights due to symmetry so
       ! it's valid to calculate the centroid first.
       ! The first n_shell values are the area weights, the rest are 
       ! shear weights.
-      weights = calc_weights(matmul(transpose(r_ref), c_mat), jtype)
+      weights = calc_weights(matmul(transpose(r_ref), c_mat), n_shell, 
+     1                       jtype)
       total_weight = zero
       do i = 1, n_shell
         total_weight = total_weight + weights(1, i)
@@ -130,18 +131,18 @@ C ******************************************************************** C
       
       ! Compute the linearized rotation matrix
       r_mat = rot_mat(op_quat)
-      g_mat = calc_g(op_quat, b_mat, c_mat, lambda, r_mat)
-      q_mat = calc_q(op_quat, g_mat)
+      g_mat = calc_g(op_quat, n_shell, b_mat, c_mat, lambda, r_mat)
+      q_mat = calc_q(op_quat, n_shell, g_mat)
       
       ! Compute the warping amplitude
-      psi_all = warp_fun(c_mat, r_ref)
+      psi_all = warp_fun(c_mat, n_shell, r_ref)
       t_def = matmul(r_mat, r_ref(:, 3))
       w_amp = warp_amp(x_shell, x_shell_def, u_cent, t_def, r_mat,
      1                 psi_all)
      
       ! Compute the linearized warping
-      w_lin = calc_w_weighted(x_shell_def, r_ref(:, 3), psi_all, r_mat, 
-     1                        g_mat, weights(1, :))
+      w_lin = calc_w_weighted(x_shell_def,n_shell, r_ref(:, 3), psi_all,
+     1                        r_mat, g_mat, weights(1, :))
       
       ! Compute the linearized centroid displacement
       disp_lin = calc_disp_lin(n_shell, weights, total_weight, r_ref, 
@@ -324,21 +325,23 @@ C     Compute G matrix
 C ******************************************************************** C
       ! Returns the instantaneous rotation matrix
       ! @ input q: Optimal rotation quaternion
+      ! @ input n_sh: Number of shell nodes (N)
       ! @ input b: \matcal{B} matrix from [2]
       ! @ input c: C matrix from [2]
       ! @ input lam: Minimum eigenvalue of B matrix
       ! @ input r: Rotation matrix of optimal rotation quaternion
       ! @ returns g: Instantaneous rotation matrix
-      function calc_g(q, b, c, lam, r) result(g)
+      function calc_g(q, n_sh, b, c, lam, r) result(g)
       ! Input and output
-      real(8), intent(in)   ::  q(4), b(:, :), c(:, :), r(3, 3)
+      integer, intent(in)   ::  n_sh
+      real(8), intent(in)   ::  q(4), b(4, 4), c(3, n_sh), r(3, 3)
       real(8), intent(in)   ::  lam
-      real(8), allocatable  ::  g(:, :)
+      real(8)               ::  g(3, 3*n_sh)
       ! Internal
       integer               ::  sz(2)
       real(8)               ::  qrr(4, 4), qrr_3(4, 3), xinv(3, 3), 
      1                          id4(4, 4)
-      real(8), allocatable  ::  a_temp(:, :)
+      real(8)               ::  a_temp(3, n_sh)
       ! LAPACK
       integer               :: n_ls, nrhs
       parameter                (n_ls = 3)
@@ -347,20 +350,17 @@ C ******************************************************************** C
       integer               :: info
       integer               :: ipiv(n_ls)
       external dgesv
-      ! Assign array sizes
-      sz = shape(c)
-      allocate(a_temp(3, sz(2)))
-      allocate(g(3, 3 * sz(2)))
-      nrhs = 3 * sz(2)
       ! Function start
+      nrhs = 3 * n_sh
       ! Calculate I_4x4
       id4(:, :) = 0.d0
       forall(i = 1:4) id4(i, i) = 1.d0
+      ! Calculate instantaneous rotation
       qrr = right_quat(q(1), q(2:4))
       qrr_3 = qrr(:, 2:4)
       xinv = matmul(matmul(transpose(qrr_3), (b - lam * id4)), qrr_3)
       a_temp = matmul(r, c)
-      do i = 1, sz(2)
+      do i = 1, n_sh
         g(:, 3*i-2:3*i) = transpose(-skew_sym(a_temp(:, i)))
       end do
       call dgesv( n_ls, nrhs, xinv, lda_ls, ipiv, g, ldb_ls, info )
@@ -371,19 +371,18 @@ C ******************************************************************** C
 C     Compute linearized rotation matrix
 C ******************************************************************** C
       ! Returns the linearization of the optimal rotation vector
-      ! @ input q: Optimal rotation quaternion
-      ! @ input g: Instantaneous rotation matrix
+      ! @ input q: Optimal rotation quaternion, size 4
+      ! @ input n_sh: Number of shell nodes (N)
+      ! @ input g: Instantaneous rotation matrix, 3x3N
       ! @ returns qq: Linearized rotation matrix
-      pure function calc_q(q, g) result(qq)
+      pure function calc_q(q, n_sh, g) result(qq)
       ! Input and output
-      real(8), intent(in)   ::  q(4), g(:, :)
-      real(8), allocatable  ::  qq(:, :)
+      integer, intent(in)   ::  n_sh
+      real(8), intent(in)   ::  q(4), g(3, 3*n_sh)
+      real(8)               ::  qq(3, 3*n_sh)
       ! Internal
       integer               ::  sz(2)
-      real(8)               ::  qrr(4, 4), qrr_3(4, 3)      
-      ! Assign array sizes
-      sz = shape(g)
-      allocate(qq(3, sz(2)))
+      real(8)               ::  qrr(4, 4), qrr_3(4, 3)
       ! Function start
       ! Compute the linearized rotation matrix
       qrr = right_quat(q(1), q(2:quatdim))
@@ -428,33 +427,35 @@ C ******************************************************************** C
 C     Compute reference configuration
 C ******************************************************************** C
       ! Returns the right-hand ordered reference configuration
-      ! @ input ref_pts: initial [x, y, z] coordinates of each point
+      ! @ input init_pts: initial [x, y, z] coordinates of each point
+      ! @ input n_sh: Number of shell nodes (N)
       ! @ returns o: Orientation of the reference configuration that is 
       !              a valid right-handed coordinate system.
-      function ini_config(ref_pts) result(o)
-      !
-      real(8), intent(in) :: ref_pts(:, :)
-      real(8)             :: o(3, 3)
-      integer :: ne, nselect, mat_shape(2)
-      parameter(ne = 3, nselect = 3)
-      integer :: lda, ldz
-      parameter(lda = ne, ldz = ne)
-      integer :: info, lwork, liwork, il, iu, m
-      double precision :: abstol, vl, vu
-      integer :: lwmax
-      parameter(lwmax = 1000)
-      integer :: isuppz(ne), iwork(lwmax)
-      double precision :: ae(lda, ne), w(ne), z(ldz, nselect), 
-     1 work(lwmax)
+      function ini_config(init_pts, n_sh) result(o)
+      ! Input and output
+      integer, intent(in) ::  n_sh
+      real(8), intent(in) ::  init_pts(3, n_sh)
+      real(8)             ::  o(3, 3)
+      ! Internal
+      integer             :: ne, nselect, mat_shape(2)
+      parameter             (ne = 3, nselect = 3)
+      integer             :: lda, ldz
+      parameter             (lda = ne, ldz = ne)
+      integer             :: info, lwork, liwork, il, iu, m
+      real(8)             :: abstol, vl, vu
+      integer             :: lwmax
+      parameter             (lwmax = 1000)
+      integer             :: isuppz(ne), iwork(lwmax)
+      double precision    :: ae(lda, ne), w(ne), z(ldz, nselect), 
+     1                       work(lwmax)
       external dsyevr
       !
-      mat_shape = shape(ref_pts)
       ae(:, :) = zero
       ! The spread is used to compute the outer product of two vectors
-      do i = 1, mat_shape(2)
+      do i = 1, n_sh
         ae = ae 
-     1  + spread(ref_pts(:, i), dim=2, ncopies=3) *
-     2    spread(ref_pts(:, i), dim=1, ncopies=3)
+     1  + spread(init_pts(:, i), dim=2, ncopies=3) *
+     2    spread(init_pts(:, i), dim=1, ncopies=3)
       end do
       !
       abstol = -1.0
@@ -475,34 +476,31 @@ C     Calculate the warping function for all nodes
 C ******************************************************************** C
       ! Returns the warping function evaluated at each node.
       ! @ input c: Location of nodes in reference config. relative to 
-      !            centroid.
+      !            centroid, size 3xN
+      ! @ input n_sh: Number of shell nodes (N)
       ! @ input r0: Rotation from reference to initial configuration
       ! @ returns psi: Warping function at each node.
       !
       ! Notes:
       !   - If the distance between adjacent nodes is less than 1e-8
       !   then nodes on the web can be incorrectly identified
-      pure function warp_fun(c, r0) result(psi)
+      pure function warp_fun(c, n_sh, r0) result(psi)
       ! Input and output
-      real(8), intent(in)   :: c(:, :), r0(3, 3)
-      real(8), allocatable  :: psi(:), c2(:, :)
+      integer, intent(in)   ::  n_sh
+      real(8), intent(in)   :: c(3, n_sh), r0(3, 3)
+      real(8)               :: psi(n_sh), c2(3, n_sh)
       ! Internal
       real(8)             :: s, s1, s2, two, four, tol
       parameter              (two = 2.d0, four = 4.d0, tol = 1.d-8)
-      integer             :: i, sz(2)
+      integer             :: i
       ! Allocate array
-      ! sz(2) = N, the number of shell nodes
-      sz = shape(c)
-      allocate(psi(sz(2)))
-      allocate(c2(3, sz(2)))
       ! Rotate from the initial config to the reference config
-      do i = 1, sz(2)
-        c2(:, i) = matmul(transpose(r0), c(:, i))
-      end do
+      c2 = matmul(transpose(r0), c)
       ! Calculate the width and depth of the section
       s1 = two * maxval(c2(1, :))
       s2 = two * maxval(c2(2, :))
-      do i = 1, sz(2)
+      ! Calculate the warping function, \psi = X*Y
+      do i = 1, n_sh
         if (abs(c2(2, i) - s2 / two ) < tol) then
           ! Node is on the top flange
           s = c2(1, i) + s1 / two
@@ -553,47 +551,40 @@ C ******************************************************************** C
 C     Compute the linearized warping vector
 C ******************************************************************** C
       ! Returns the linearized warping vector.
-      ! @ input x_def: pos. of nodes in deformed configuration
+      ! @ input x_def: pos. of nodes in deformed configuration, 3xN
+      ! @ input n_sh: Number of shell nodes (N)
       ! @ input t0: Orientation of the normal to the cross-section in  
       !             the reference configuration
       ! @ input psi: Warping function for all the nodes
       ! @ input r: Rotation from initial to deformed configuration
-      ! @ input g: Instantaneous rotation matrix
-      ! @ input we: Area weight value for each node
+      ! @ input g: Instantaneous rotation matrix, size 3x3N
+      ! @ input we: Area weight value for each node, size N
       ! @ returns w_lin: Linearization of warping amplitude w.r.t x
       !
       ! Notes:
       !   - we containts the area weights for each node, then the shear
       !   weights for each node, only use the first set
-      pure function calc_w_weighted(x_def, t0, psi, r, g, we) 
+      pure function calc_w_weighted(x_def, n_sh, t0, psi, r, g, we) 
      1              result(w_lin)
       ! Input and output
-      real(8), intent(in)   ::  x_def(:, :), t0(3), psi(:), r(3, 3) 
-      real(8), intent(in)   ::  g(:, :), we(:)
-      real(8), allocatable  ::  w_lin(:)
+      integer, intent(in)   ::  n_sh
+      real(8), intent(in)   ::  x_def(3, n_sh), t0(3), psi(n_sh),r(3, 3)
+      real(8), intent(in)   ::  g(3, 3*n_sh), we(n_sh)
+      real(8)               ::  w_lin(3*n_sh)
       ! Internal
-      integer               ::  sz(2), i, j, num_nodes
-      real(8)               ::  drdx_rs(3, 3), t(3), we_total
-      real(8), allocatable  ::  drdx(:, :)
+      integer               ::  i, j
+      real(8)               ::  t(3), we_total
       real(8)               ::  zero, one, two
       parameter                 (zero = 0.d0, one = 1.d0, two = 2.d0)
       real(8)               ::  zero_tol
       parameter                 (zero_tol=1.d-6)
-      ! Allocate arrays
-      ! Number of columns in G should be 3 * num_nodes
-      sz = shape(g)
-      num_nodes = sz(2) / 3
-      allocate(w_lin(sz(2)))
-      allocate(drdx(9, sz(2)))
-      ! Calculate the derivative of R
-      !drdx = matmul(-skew_mat(r), g)
       ! Assemble the linearized warping vector
       t = matmul(r, t0)
-      w_lin(:) = zero
+      w_lin = zero
       ! Compute second term
       num_psi_non_zero = 0
       we_total = zero
-      do i = 1, num_nodes
+      do i = 1, n_sh
         if (abs(psi(i)) > zero_tol) then
           we_total = we_total + we(i)
           w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) + t / psi(i) * we(i)
@@ -633,6 +624,7 @@ C     Determine the weights for all the nodes
 C ******************************************************************** C
       ! Returns the weight value for each node
       ! @ input p: Shell nodes in the reference configuration, size 3xN
+      ! @ input n_sh: Number of shell nodes (N)
       ! @ input tf_tw_code: Encoded flange and web thickness factors
       ! @ returns w: Weight value for each node
       !
@@ -646,25 +638,24 @@ C ******************************************************************** C
       !   - The flange and web mesh distances are assumed to be constant
       !     between nodes
       !   - The first row is the area weights, then strong axis, then weak
-      function calc_weights(p, tf_tw_code) result(w)
+      function calc_weights(p, n_sh, tf_tw_code) result(w)
       ! Input and output
-      real(8), intent(in)   ::  p(:, :)
-      integer, intent(in)   ::  tf_tw_code
-      real(8), allocatable  ::  w(:, :)
+      real(8), intent(in)   ::  p(3, n_sh)
+      integer, intent(in)   ::  tf_tw_code, n_sh
+      real(8)               ::  w(3, n_sh)
       ! Internal variables
       ! Tags for node positions
       integer               ::  web_tag, flange_tag, corner_tag, 
      1                          joint_tag
       parameter                 (web_tag=1, flange_tag=2, corner_tag=3,
      1                           joint_tag=4)
-      integer, allocatable  ::  classification(:)
+      integer               ::  classification(n_sh)
       ! For weights at each tag
       real(8)               ::  web_weight, flange_weight,corner_weight,
      1                          joint_weight
       real(8)               ::  tf, tw, delta_f, delta_w, x_max, y_max,
      1                          pt(3), x_max_2, y_max_2
-      integer               ::  i, sz(2), d_digits, deci, n_digits, c,
-     1                          tf_tw
+      integer               ::  i, d_digits, deci, n_digits, c, tf_tw
       ! For shear weights
       real(8) ::  width, depth, v_f_w(4), v_total, v_prct_f, v_prct_w, 
      1 a_web, a_flange
@@ -676,16 +667,13 @@ C ******************************************************************** C
       real(8) :: zero_tol
       parameter(zero_tol=1.d-3)
       ! Allocate arrays
-      sz = shape(p)
-      allocate(w(3, sz(2)))
-      allocate(classification(sz(2)))
       
       ! Function start
       ! Classify the points
       classification(:) = 0
       x_max = maxval(p(1, :))
       y_max = maxval(p(2, :))
-      do i = 1, sz(2)
+      do i = 1, n_sh
         pt = p(:, i)
         if (abs(pt(1)) < zero_tol) then
           ! Point is on the web
@@ -710,7 +698,7 @@ C ******************************************************************** C
       ! Start search for 2nd greatest values
       x_max_2 = -x_max
       y_max_2 = -y_max
-      do i = 1, sz(2)
+      do i = 1, n_sh
         pt = p(:, i)
         c = classification(i)
         ! Web
@@ -782,7 +770,7 @@ C ******************************************************************** C
       v_w_joint_weight = v_w_flange_weight + 0.5d0 * v_w_web_weight
             
       ! Assign weights
-      do i = 1, sz(2)
+      do i = 1, n_sh
         c = classification(i)
         if (c == web_tag) then
           w(1, i) = web_weight
