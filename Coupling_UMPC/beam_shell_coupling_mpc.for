@@ -804,64 +804,116 @@ C ******************************************************************** C
       end do
       end function
 C ******************************************************************** C
-C     Calculate the shear factor resultants for the strong and weak axes
+C     Calculate the shear factor for flange nodes (weak and strong)
 C ******************************************************************** C
-      ! Returns the shear factor resultant for one flange and web
-      ! @ input depth: Section depth
-      ! @ input bf: Section width
+      ! Returns the shear factors for the flange nodes
+      ! @ input xi: Flange node
+      ! @ input d: Section depth
+      ! @ input d1: Section depth minus two flange thicknesses
+      ! @ input bf: Section flange width
       ! @ input tf: Flange thickness
       ! @ input tw: Web thickness
       ! @ returns: The shear resultants
-      !             shears(1): strong axis flange
-      !             shears(2): strong axis web
-      !             shears(3): weak axis flange
-      !             shears(4): weak axis web
-      pure function shear_factors(depth, bf, tf, tw) result(shears)
+      !             v(1): strong axis flange
+      !             v(2): weak axis flange
+      pure function shear_flange(xi, d, d1, bf, tf, tw)
+        result(v)
+        ! Input and output
+        real(8), intent(in) ::  xi(3), d, d1, bf, tf, tw
+        real(8)             ::  v(2)
+        ! Internal
+        real(8)             ::  x1, y1
+        ! Function start
+        x1 = xi(1)
+        y1 = x1(2)
+        ! Strong axis
+        v(1) = (2.* bf * tf * (d + d1) + tw * (d1**2 - 4. * y1**2)) / 8.
+        ! Weak axis
+        v(2) = (bf**2 - 4. * x1**2) / 8.
+      end function
+C ******************************************************************** C
+C     Calculate the shear factor for web nodes (weak and strong)
+C ******************************************************************** C
+      ! Returns the shear factors for the web nodes
+      ! @ input xi: Flange node
+      ! @ input d: Section depth
+      ! @ input d1: Section depth minus two flange thicknesses
+      ! @ input bf: Section flange width
+      ! @ input tf: Flange thickness
+      ! @ input tw: Web thickness
+      ! @ returns: The shear resultants
+      !             v(1): strong axis web 
+      !             v(2): weak axis web 
+      pure function shear_web(xi, d, d1, bf, tf, tw)
+        result(v)
+        ! Input and output
+        real(8), intent(in) ::  xi(3), d, d1, bf, tf, tw
+        real(8)             ::  v(2)
+        ! Internal
+        real(8)             ::  x1, y1
+        ! Function start
+        x1 = xi(1)
+        y1 = x1(2)
+        ! Strong axis
+        v(1) = (bf * (d ** 2 - 4. * y1 ** 2)) / 8.
+        ! Weak axis
+        v(2) = (bf ** 2 - (d - 1.) * tw ** 2 - 4. * d * x1 ** 2) / 8.
+      end function
+C ******************************************************************** C
+C     Calculate the shear factor resultants for the strong and weak axes
+C ******************************************************************** C
+      ! Returns the shear factor resultant for one flange and web
+      ! @ input p: Shell nodes in the reference configuration, 3xN
+      ! @ input n_sh: Number of shell nodes (N)
+      ! @ input d: Section depth
+      ! @ input bf: Section width
+      ! @ input tf: Flange thickness
+      ! @ input tw: Web thickness
+      ! @ input c_tags: Node classification tag, size N
+      ! @ returns: The shear resultants, size Nx2
+      !
+      ! Notes:
+      !   - The first column of shears has the strong axis, and the
+      !   second column has the weak axis values
+      pure function shear_factors(p, n_sh, d, bf, tf, tw, c_tags)
+        result(shears)
       ! Input and output
-      real(8), intent(in)   ::  depth, bf, tf, tw
-      real(8)               ::  shears(4)
+      integer, intent(in) ::  n_sh, c_tags(n_sh)
+      real(8), intent(in) ::  p(3, n_sh), d, bf, tf, tw
+      real(8)             ::  v(n_sh, 2)
       ! Internal variables
-      real(8)               ::  d1, d1_2, d1_cl, tau_f_1, tau_w_1, 
-     1                          tau_w_0, y
-      real(8)               ::  two, half, quart
-      parameter                 (two=2.d0, four=4.d0, half=0.5d0, 
-     1                           quart=0.25d0, zero=0.d0)
+      real(8)             ::  d1, tau(2), total_strong, total_weak
+      integer             ::  i, c
+      ! Classification tags
+      integer             ::  web_tag, flange_tag, corner_tag, 
+     1                        joint_tag
+      parameter              (web_tag=1, flange_tag=2, corner_tag=3,
+     1                        joint_tag=4)
       ! Function start
-      d1 = depth - two * tf
-      d1_2 = d1 / two
-      d1_cl = depth - tf
-      
-      ! Strong axis
-      ! Shear stress factor on flange at y = d1/2
-      tau_f_1 = (half * bf * (half * depth - d1_2) 
-     1           * (half * depth + d1_2)) / bf
-      ! Shear stress factor on web at y = d1/2
-      y = d1_2
-      tau_w_1 = (quart * bf * tf * (depth + d1) 
-     1           + half * tw * (half * d1 - y) * (half * d1 + y)) / tw
-      ! Shear stress factor on web at y = 0
-      y = zero
-      tau_w_0 = (quart * bf * tf * (depth + d1) 
-     1           + half * tw * (half * d1 - y) * (half * d1 + y)) / tw
-      
-      ! Compute the resultants through linear approximation
-      shears(1) = half * tau_f_1 * bf * tf
-      shears(2) = tw * d1_cl * (tau_w_1 + half * (tau_w_0 - tau_w_1))
-      
-      ! Weak axis
-      ! Shear stress factor on flange at x = tw/2
-      x11 = tw / two
-      tau_f_1 = (bf ** 2 - four * x11 ** 2) / 8.d0
-      ! Shear stress factor on web at x = tw / 2
-      tau_w_1 =(two * tau_f_1 + depth/8. * (tw ** 2 - four*x11 ** 2))/d1
-      ! Shear stress factor on web at x = 0
-      x11 = zero
-      tau_w_0= (two * tau_f_1 + depth/8. * tw ** 2)/d1
-      ! Shear resultants for the flange and web in the weak axis
-      shears(3) = quart * (bf - tw) * tf * tau_f_1
-      shears(4) = tw * depth * tau_w_0 
-     1            + depth * tw * half * (tau_w_0 - tau_w_1)
-      
+      ! The first value of tau is for the strong axis, the second is for
+      ! the weak axis
+      d1 = depth - 2. * tf
+      total_strong = 0.
+      total_weak = 0.
+      do i = 1, n_sh
+        c = c_tags(i)
+        if (c == web_tag) then
+          tau = delta_w * shear_web(p(:, i), d, d1, bf, tf, tw)
+        else if (c == flange_tag) then
+          tau = delta_f * shear_flange(p(:, i), d, d1, bf, tf, tw)
+        else if (c == corner_tag) then
+          tau = delta_f / 2. * shear_flange(p(:, i), d, d1, bf, tf, tw)
+        else
+          tau = delta_f * shear_flange(p(:, i), d, d1, bf, tf, tw)
+          tau = tau + delta_w/2. * shear_web(p(:, i), d, d1, bf, tf, tw)
+        end if
+        total_strong = total_strong + tau(1)
+        total_weak = total_weak + tau(2)
+        v(i, :) = tau
+      end do
+
+      v(:, 1) = v(:, 1) / total_strong
+      v(:, 2) = v(:, 2) / total_weak
       end function
 C ******************************************************************** C
 C     Calculate the linearized displacement matrix
