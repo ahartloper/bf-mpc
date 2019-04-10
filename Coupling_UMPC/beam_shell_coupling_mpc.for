@@ -77,7 +77,7 @@ C
       allocate(q_mat(ndim, ndim * n_shell))
       allocate(psi_all(n_shell))
       allocate(w_lin(ndim * n_shell))
-      allocate(weights(ndim, n_shell))
+      allocate(weights(4, n_shell))
       allocate(disp_lin(ndim, n_shell))
 C ******************************************************************** C
 C Subroutine definition
@@ -627,6 +627,10 @@ C ******************************************************************** C
       ! @ input n_sh: Number of shell nodes (N)
       ! @ input tf_tw_code: Encoded flange and web thickness factors
       ! @ returns w: Weight value for each node
+      !   - Row 1: Area weight
+      !   - Row 2: Normalized strong axis weight
+      !   - Row 3: Normalized weak axis weight
+      !   - Row 4: Normalized complementary strong axis weight
       !
       ! Notes:
       !   - The weight represents the equivalent area of each node
@@ -637,7 +641,6 @@ C ******************************************************************** C
       !   - The weights are only valid if the interface is elastic
       !   - The flange and web mesh distances are assumed to be constant
       !     between nodes
-      !   - The first row is the area weights, then strong axis, then weak
       function calc_weights(p, n_sh, tf_tw_code) result(w)
       ! Input and output
       integer, intent(in)   ::  n_sh
@@ -658,7 +661,7 @@ C ******************************************************************** C
      1                          pt(3), x_max_2, y_max_2
       integer               ::  i, d_digits, deci, n_digits, c, tf_tw
       ! For shear weights
-      real(8) ::  width, depth, v_weights(n_sh, 2)
+      real(8) ::  width, depth, v_weights(n_sh, 3)
       ! Tolerance in positions
       real(8) :: zero_tol
       parameter(zero_tol=1.d-3)
@@ -758,8 +761,8 @@ C ******************************************************************** C
         else if (c == joint_tag) then
           w(1, i) = joint_weight
         end if
-        ! Add the shear weights for the strong and weak axes
-        w(2:3, i) = v_weights(i, :)
+        ! Add the shear weights
+        w(2:4, i) = v_weights(i, :)
       end do
       end function
 C ******************************************************************** C
@@ -788,6 +791,56 @@ C ******************************************************************** C
         v(1) = (d ** 2 - 4. * y1 ** 2) / 8.
         ! Weak axis
         v(2) = (bf ** 2 - 4. * x1 ** 2) / 8.
+      end function
+C ******************************************************************** C
+C     Calculate the complementary shear factor for flange nodes 
+C ******************************************************************** C
+      ! Returns the complementary shear factors for the flange nodes
+      ! @ input xi: Flange node
+      ! @ input d1: Section depth minus two flange thicknesses
+      ! @ input bf: Section flange width
+      ! @ returns: The complementary shear in the direction of the weak
+      !             axis
+      !
+      ! Notes:
+      !   - This function assumes that the force is applied in the posi-
+      !   tive y direction
+      !   - At the joint nodes no complementary shear is applied if the
+      !   positive and negative forces cancel out
+      pure function comp_shear_flange(xi, d1, bf) result(v)
+        ! Input and output
+        real(8), intent(in) ::  xi(3), d1, bf
+        real(8)             ::  v
+        ! Internal
+        real(8)             ::  x1, y1
+        ! Function start
+        x1 = xi(1)
+        y1 = xi(2)
+        if (y1 < 0.) then
+          ! Bottom flange
+          if (x1 < 0.) then
+            ! Left side
+            v = (bf / 2. + x1) / (bf / 2.) * b * d1 / 4.
+          else if (x1 > 0.) then
+            ! Right side
+            v = (bf / 2. - x1) / (bf / 2.) * b * d1 / 4.
+          else
+            ! Joint
+            v = 0.
+          end if
+        else
+          ! Top flange
+          if (x1 < 0.) then
+            ! Left side
+            v = (bf / 2. - x1) / (bf / 2.) * b * d1 / 4.
+          else if (x1 > 0.) then
+            ! Right side
+            v = (bf / 2. + x1) / (bf / 2.) * b * d1 / 4.
+          else
+            ! Joint
+            v = 0.
+          end if
+        end if
       end function
 C ******************************************************************** C
 C     Calculate the shear factor for web nodes (weak and strong)
@@ -828,21 +881,20 @@ C ******************************************************************** C
       ! @ input tf: Flange thickness
       ! @ input tw: Web thickness
       ! @ input c_tags: Node classification tag, size N
-      ! @ returns: The shear resultants, size Nx2
-      !
-      ! Notes:
-      !   - The first column of shears has the strong axis, and the
-      !   second column has the weak axis values
+      ! @ returns: The normalized shear resultants, size Nx3
+      !   - Column 1: strong axis
+      !   - Column 2: weak axis
+      !   - Column 3: complementary force for strong axis
       pure function shear_factors(p, n_sh, d, bf, tf, tw, 
      1                            delta_f, delta_w, c_tags) result(v)
       ! Input and output
       integer, intent(in) ::  n_sh, c_tags(n_sh)
       real(8), intent(in) ::  p(3, n_sh), d, bf, tf, tw, 
      1                        delta_f, delta_w
-      real(8)             ::  v(n_sh, 2)
+      real(8)             ::  v(n_sh, 3)
       ! Internal variables
       real(8)             ::  d1, tau(2), total_strong, total_weak,
-     1                        p_corner(3)
+     1                        p_corner(3), tau_2
       integer             ::  i, c
       ! Classification tags
       integer             ::  web_tag, flange_tag, corner_tag, 
@@ -859,30 +911,36 @@ C ******************************************************************** C
         c = c_tags(i)
         if (c == web_tag) then
           tau = tw * delta_w * shear_web(p(:, i), d, d1, bf, tf, tw)
+          tau_2 = 0.
         else if (c == flange_tag) then
           tau = tf * delta_f * shear_flange(p(:, i), d, d1, bf, tf, tw)
+          tau_2 = tf * delta_f / 2. * comp_shear_flange(p(:, i), d1, bf)
         else if (c == corner_tag) then
           p_corner(1) = -sign(1., p(1, i)) * delta_f / 2.
           p_corner(2:3) = 0.
           p_corner = p(:, i) + p_corner
           tau = tf*delta_f/2.* shear_flange(p_corner, d, d1, bf, tf, tw)
+          tau_2 = tf * delta_f / 2. * comp_shear_flange(p(:, i), d1, bf)
         else
           tau = tf * delta_f * shear_flange(p(:, i), d, d1, bf, tf, tw)
           tau = tau+ tw*delta_w/2.*shear_web(p(:, i), d, d1, bf, tf, tw)
+          tau_2 = 0.
         end if
         total_strong = total_strong + tau(1)
         total_weak = total_weak + tau(2)
-        v(i, :) = tau
+        v(i, 1:2) = tau
+        v(i, 3) = tau_2
       end do
 
       v(:, 1) = v(:, 1) / total_strong
       v(:, 2) = v(:, 2) / total_weak
+      v(:, 3) = v(:, 3) / total_strong
       end function
 C ******************************************************************** C
 C     Calculate the linearized displacement matrix
 C ******************************************************************** C
       ! Returns the matrix relating centroidal disp. to shell disps.
-      ! @ input w_all: Area and shear weights, size 3xN
+      ! @ input w_all: Area and shear weights, size 4xN
       ! @ input a_total: Total area
       ! @ input r0: Initial orientation, size 3x3
       ! @ input r: Rotation from initial to deformed, size 3x3
@@ -891,7 +949,7 @@ C ******************************************************************** C
       pure function calc_disp_lin(n_sh, w_all, a_total, r0, r) 
      1              result(u_lin)
       ! Input and output
-      real(8), intent(in)   ::  w_all(3, n_sh), a_total,r0(3, 3),r(3, 3)
+      real(8), intent(in)   ::  w_all(4, n_sh), a_total,r0(3, 3),r(3, 3)
       integer, intent(in)   ::  n_sh
       real(8)               ::  u_lin(3, n_sh)
       ! Internal variables
@@ -901,9 +959,15 @@ C ******************************************************************** C
       ! Function start
       do i = 1, n_sh
         we = 0.d0
+        ! Weak axis force due to weak axis displacement
         we(1, 1) = w_all(3, i)
+        ! Weak axis force in flange due to strong axis displacement
+        we(1, 2) = w_all(4, i)
+        ! Strong axis force due to strong axis displacement
         we(2, 2) = w_all(2, i)
+        ! Axial force due to axial displacement
         we(3, 3) = w_all(1, i) / a_total
+        ! Rotate the weights from the reference to the deformed config
         we = matmul(r, matmul(r0, we))
         u_lin(1, i) = norm2(we(1, :))
         u_lin(2, i) = norm2(we(2, :))
