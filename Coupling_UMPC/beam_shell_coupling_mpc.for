@@ -78,7 +78,7 @@ C
       allocate(psi_all(n_shell))
       allocate(w_lin(ndim * n_shell))
       allocate(weights(4, n_shell))
-      allocate(disp_lin(ndim, n_shell))
+      allocate(disp_lin(ndim, ndim * n_shell))
 C ******************************************************************** C
 C Subroutine definition
 C ******************************************************************** C
@@ -156,9 +156,7 @@ C ******************************************************************** C
         ! Index corresponding to the shell nodes
         i_sh = i - 1
         ! Displacement constraints
-        a(1, 1, i) = -disp_lin(1, i_sh)
-        a(2, 2, i) = -disp_lin(2, i_sh)
-        a(3, 3, i) = -disp_lin(3, i_sh)
+        a(1:3, 1:3, i) = -disp_lin(1:3, 3*i_sh-2:3*i_sh)
         ! Rotation constraints
         a(4, 1:3, i) = -q_mat(1, 3*i_sh-2:3*i_sh) * weights(1, i_sh)
         a(5, 1:3, i) = -q_mat(2, 3*i_sh-2:3*i_sh) * weights(1, i_sh)
@@ -646,7 +644,7 @@ C ******************************************************************** C
       integer, intent(in)   ::  n_sh
       real(8), intent(in)   ::  p(3, n_sh)
       integer, intent(in)   ::  tf_tw_code
-      real(8)               ::  w(3, n_sh)
+      real(8)               ::  w(4, n_sh)
       ! Internal variables
       ! Tags for node positions
       integer               ::  web_tag, flange_tag, corner_tag, 
@@ -812,35 +810,14 @@ C ******************************************************************** C
         real(8), intent(in) ::  xi(3), d1, bf
         real(8)             ::  v
         ! Internal
-        real(8)             ::  x1, y1
+        real(8)             ::  x1, y1, sgn
         ! Function start
         x1 = xi(1)
         y1 = xi(2)
-        if (y1 < 0.) then
-          ! Bottom flange
-          if (x1 < 0.) then
-            ! Left side
-            v = (bf / 2. + x1) / (bf / 2.) * b * d1 / 4.
-          else if (x1 > 0.) then
-            ! Right side
-            v = (bf / 2. - x1) / (bf / 2.) * b * d1 / 4.
-          else
-            ! Joint
-            v = 0.
-          end if
-        else
-          ! Top flange
-          if (x1 < 0.) then
-            ! Left side
-            v = (bf / 2. - x1) / (bf / 2.) * b * d1 / 4.
-          else if (x1 > 0.) then
-            ! Right side
-            v = (bf / 2. + x1) / (bf / 2.) * b * d1 / 4.
-          else
-            ! Joint
-            v = 0.
-          end if
-        end if
+        ! Direction assumes a positive shear force
+        sgn = sign(1.d0, x1 * y1)
+        ! Linear interpolation based on position along half flange
+        v = sgn * (bf / 2. - abs(x1)) / (bf / 2.) * bf * d1 / 4.
       end function
 C ******************************************************************** C
 C     Calculate the shear factor for web nodes (weak and strong)
@@ -904,6 +881,7 @@ C ******************************************************************** C
       ! Function start
       ! The first value of tau is for the strong axis, the second is for
       ! the weak axis
+      ! tau_2 is the complementary shear in the flange
       d1 = d - 2. * tf
       total_strong = 0.
       total_weak = 0.
@@ -916,6 +894,7 @@ C ******************************************************************** C
           tau = tf * delta_f * shear_flange(p(:, i), d, d1, bf, tf, tw)
           tau_2 = tf * delta_f / 2. * comp_shear_flange(p(:, i), d1, bf)
         else if (c == corner_tag) then
+          ! Sample at one-half element distance towards the web
           p_corner(1) = -sign(1., p(1, i)) * delta_f / 2.
           p_corner(2:3) = 0.
           p_corner = p(:, i) + p_corner
@@ -924,6 +903,7 @@ C ******************************************************************** C
         else
           tau = tf * delta_f * shear_flange(p(:, i), d, d1, bf, tf, tw)
           tau = tau+ tw*delta_w/2.*shear_web(p(:, i), d, d1, bf, tf, tw)
+          ! Complementary shear cancels from both sides at the joint
           tau_2 = 0.
         end if
         total_strong = total_strong + tau(1)
@@ -931,7 +911,9 @@ C ******************************************************************** C
         v(i, 1:2) = tau
         v(i, 3) = tau_2
       end do
-
+      
+      ! Normalize the weights, the complementary takes the same 
+      ! normalization as the strong axis
       v(:, 1) = v(:, 1) / total_strong
       v(:, 2) = v(:, 2) / total_weak
       v(:, 3) = v(:, 3) / total_strong
@@ -949,12 +931,12 @@ C ******************************************************************** C
       pure function calc_disp_lin(n_sh, w_all, a_total, r0, r) 
      1              result(u_lin)
       ! Input and output
-      real(8), intent(in)   ::  w_all(4, n_sh), a_total,r0(3, 3),r(3, 3)
-      integer, intent(in)   ::  n_sh
-      real(8)               ::  u_lin(3, n_sh)
+      real(8), intent(in) ::  w_all(4, n_sh), a_total, r0(3, 3), r(3, 3)
+      integer, intent(in) ::  n_sh
+      real(8)             ::  u_lin(3, 3 * n_sh)
       ! Internal variables
-      real(8)               ::  we(3, 3)
-      integer               ::  i   
+      real(8)             ::  we(3, 3), rr0(3, 3)
+      integer             ::  i   
       
       ! Function start
       do i = 1, n_sh
@@ -968,10 +950,9 @@ C ******************************************************************** C
         ! Axial force due to axial displacement
         we(3, 3) = w_all(1, i) / a_total
         ! Rotate the weights from the reference to the deformed config
-        we = matmul(r, matmul(r0, we))
-        u_lin(1, i) = norm2(we(1, :))
-        u_lin(2, i) = norm2(we(2, :))
-        u_lin(3, i) = norm2(we(3, :))
+        ! w_rotated = r0.t * r.t * we * r * r0
+        rr0 = matmul(r, r0)
+        u_lin(:, 3*i-2:3*i) = matmul(transpose(rr0), matmul(we, rr0))
       end do
       end function
 C ******************************************************************** C
