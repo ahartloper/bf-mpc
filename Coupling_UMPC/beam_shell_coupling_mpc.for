@@ -639,7 +639,7 @@ C ******************************************************************** C
       !   - The weights are only valid if the interface is elastic
       !   - The flange and web mesh distances are assumed to be constant
       !     between nodes
-      function calc_weights(p, n_sh, tf_tw_code) result(w)
+      pure function calc_weights(p, n_sh, tf_tw_code) result(w)
       ! Input and output
       integer, intent(in)   ::  n_sh
       real(8), intent(in)   ::  p(3, n_sh)
@@ -795,19 +795,19 @@ C     Calculate the complementary shear factor for flange nodes
 C ******************************************************************** C
       ! Returns the complementary shear factors for the flange nodes
       ! @ input xi: Flange node
-      ! @ input d1: Section depth minus two flange thicknesses
+      ! @ input d_cl: Section depth minus flange thicknesses
       ! @ input bf: Section flange width
       ! @ returns: The complementary shear in the direction of the weak
-      !             axis
+      !            axis
       !
       ! Notes:
       !   - This function assumes that the force is applied in the posi-
       !   tive y direction
       !   - At the joint nodes no complementary shear is applied if the
       !   positive and negative forces cancel out
-      pure function comp_shear_flange(xi, d1, bf) result(v)
+      pure function comp_shear_flange(xi, d_cl, bf) result(v)
         ! Input and output
-        real(8), intent(in) ::  xi(3), d1, bf
+        real(8), intent(in) ::  xi(3), d_cl, bf
         real(8)             ::  v
         ! Internal
         real(8)             ::  x1, y1, sgn
@@ -817,7 +817,7 @@ C ******************************************************************** C
         ! Direction assumes a positive shear force
         sgn = sign(1.d0, x1 * y1)
         ! Linear interpolation based on position along half flange
-        v = sgn * (bf / 2. - abs(x1)) / (bf / 2.) * bf * d1 / 4.
+        v = sgn * (bf - 2. * abs(x1)) * d_cl / 4.
       end function
 C ******************************************************************** C
 C     Calculate the shear factor for web nodes (weak and strong)
@@ -871,7 +871,7 @@ C ******************************************************************** C
       real(8)             ::  v(n_sh, 3)
       ! Internal variables
       real(8)             ::  d1, tau(2), total_strong, total_weak,
-     1                        p_corner(3), tau_2
+     1                        p_corner(3), tau_2, d_cl
       integer             ::  i, c
       ! Classification tags
       integer             ::  web_tag, flange_tag, corner_tag, 
@@ -883,23 +883,25 @@ C ******************************************************************** C
       ! the weak axis
       ! tau_2 is the complementary shear in the flange
       d1 = d - 2. * tf
+      d_cl = d - tf
       total_strong = 0.
       total_weak = 0.
       do i = 1, n_sh
         c = c_tags(i)
         if (c == web_tag) then
           tau = tw * delta_w * shear_web(p(:, i), d, d1, bf, tf, tw)
+          ! Don't consider the complementary shear for the web
           tau_2 = 0.
         else if (c == flange_tag) then
           tau = tf * delta_f * shear_flange(p(:, i), d, d1, bf, tf, tw)
-          tau_2 = tf * delta_f / 2. * comp_shear_flange(p(:, i), d1, bf)
+          tau_2 = tf * delta_f * comp_shear_flange(p(:, i), d_cl, bf)
         else if (c == corner_tag) then
           ! Sample at one-half element distance towards the web
           p_corner(1) = -sign(1., p(1, i)) * delta_f / 2.
           p_corner(2:3) = 0.
           p_corner = p(:, i) + p_corner
           tau = tf*delta_f/2.* shear_flange(p_corner, d, d1, bf, tf, tw)
-          tau_2 = tf * delta_f / 2. * comp_shear_flange(p(:, i), d1, bf)
+          tau_2 = tf * delta_f / 2.* comp_shear_flange(p_corner,d_cl,bf)
         else
           tau = tf * delta_f * shear_flange(p(:, i), d, d1, bf, tf, tw)
           tau = tau+ tw*delta_w/2.*shear_web(p(:, i), d, d1, bf, tf, tw)
