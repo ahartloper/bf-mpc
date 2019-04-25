@@ -952,7 +952,7 @@ C ******************************************************************** C
         ! Rotate the weights from the reference to the deformed config
         ! w_rotated = r0.t * r.t * we * r * r0
         rr0 = matmul(r, r0)
-        u_lin(:, 3*i-2:3*i) = matmul(transpose(rr0), matmul(we, rr0))
+        u_lin(:, 3*i-2:3*i) = matmul(rr0, matmul(we, transpose(rr0)))
       end do
       end function
 C ******************************************************************** C
