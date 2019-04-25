@@ -946,7 +946,7 @@ C ******************************************************************** C
         ! Weak axis force due to weak axis displacement
         we(1, 1) = w_all(3, i)
         ! Weak axis force in flange due to strong axis displacement
-        we(1, 2) = w_all(4, i)
+        we(2, 1) = w_all(4, i)
         ! Strong axis force due to strong axis displacement
         we(2, 2) = w_all(2, i)
         ! Axial force due to axial displacement
