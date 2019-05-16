@@ -141,8 +141,8 @@ C ******************************************************************** C
      1                 psi_all)
      
       ! Compute the linearized warping
-      w_lin = calc_w_weighted(x_shell_def,n_shell, r_ref(:, 3), psi_all,
-     1                        r_mat, g_mat, weights(1, :))
+      w_lin = calc_lin_w(c_mat, n_shell, psi_all, r_ref, r_mat, 
+     1                   weights(1, :))
       
       ! Compute the linearized centroid displacement
       disp_lin = calc_disp_lin(n_shell, weights, total_weight, r_ref, 
@@ -473,7 +473,7 @@ C ******************************************************************** C
 C     Calculate the warping function for all nodes
 C ******************************************************************** C
       ! Returns the warping function evaluated at each node.
-      ! @ input c: Location of nodes in reference config. relative to 
+      ! @ input c: Location of nodes in initial config. relative to 
       !            centroid, size 3xN
       ! @ input n_sh: Number of shell nodes (N)
       ! @ input r0: Rotation from reference to initial configuration
@@ -549,48 +549,70 @@ C ******************************************************************** C
 C     Compute the linearized warping vector
 C ******************************************************************** C
       ! Returns the linearized warping vector.
-      ! @ input x_def: pos. of nodes in deformed configuration, 3xN
+      ! @ input c: Location of nodes in initial config. relative to 
+      !            centroid, size 3xN
       ! @ input n_sh: Number of shell nodes (N)
-      ! @ input t0: Orientation of the normal to the cross-section in  
-      !             the reference configuration
-      ! @ input psi: Warping function for all the nodes
-      ! @ input r: Rotation from initial to deformed configuration
-      ! @ input g: Instantaneous rotation matrix, size 3x3N
-      ! @ input we: Area weight value for each node, size N
-      ! @ returns w_lin: Linearization of warping amplitude w.r.t x
+      ! @ input psi: Warping function for all the nodes, size N
+      ! @ input r0: Rotation from referece to initial config., 3x3
+      ! @ input r: Rotation from initial to deformed config., 3x3
+      ! @ input n_area: Tributary area for each node, size N
+      ! @ returns: Linearization of warping amplitude w.r.t x, size 3Nx1
       !
       ! Notes:
       !   - we containts the area weights for each node, then the shear
       !   weights for each node, only use the first set
-      pure function calc_w_weighted(x_def, n_sh, t0, psi, r, g, we) 
-     1              result(w_lin)
+      pure function calc_lin_w(c, n_sh, psi, r0, r, n_area)
+     1              result(w_linear)
       ! Input and output
       integer, intent(in)   ::  n_sh
-      real(8), intent(in)   ::  x_def(3, n_sh), t0(3), psi(n_sh),r(3, 3)
-      real(8), intent(in)   ::  g(3, 3*n_sh), we(n_sh)
-      real(8)               ::  w_lin(3*n_sh)
+      real(8), intent(in)   ::  c(3, n_sh), psi(n_sh), r0(3,3), r(3, 3)
+      real(8), intent(in)   ::  n_area(n_sh)
+      real(8)               ::  w_linear(3*n_sh)
       ! Internal
-      integer               ::  i, j
-      real(8)               ::  t(3), we_total
-      real(8)               ::  zero, one, two
-      parameter                 (zero = 0.d0, one = 1.d0, two = 2.d0)
+      integer               ::  i
+      real(8)               ::  bimom, w_tensor(3, 3), c2(3, n_sh)
       real(8)               ::  zero_tol
       parameter                 (zero_tol=1.d-6)
+      ! Rotate from the initial config to the reference config
+      c2 = matmul(transpose(r0), c)
       ! Assemble the linearized warping vector
-      t = matmul(r, t0)
-      w_lin = zero
-      ! Compute second term
-      num_psi_non_zero = 0
-      we_total = zero
+      w_linear = 0.d0
+      bimom = 0.d0
       do i = 1, n_sh
         if (abs(psi(i)) > zero_tol) then
-          we_total = we_total + we(i)
-          w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) + t / psi(i) * we(i)
+          ! todo: bimom can be calculated in the function with psi
+          bimom = bimom + abs(c2(1, i) * psi(i) * n_area(i))
+          w_tensor = 0.d0
+          ! Warping only causes axial stress (in 33 direction)
+          w_tensor(3, 3) = psi(i) * n_area(i)
+          w_linear(3*i-2:3*i) = weight_rotater(w_tensor, r0, r)
         end if
       end do
-      ! Compute the average from all the sums for the two terms
-      w_lin = w_lin / we_total
-      
+      ! Normalize by the total bimoment to satisfy equilibrium
+      ! B = (M_f,t + M_f,b) * (d_cl / 2)
+      d_cl = maxval(c2(2, :))
+      bimom = bimom * d_cl
+      w_linear = w_linear / bimom      
+      end function
+C ******************************************************************** C
+C     Rotate weight tensors into the deformed configuration
+C ******************************************************************** C
+      ! Returns the weight vector in the deformed configuration given
+      !   a tensor in the reference configuration.
+      ! @ input w_ref: Weight tensor in reference config. (3, 3)
+      ! @ input r0: Rotation from reference to initial config. (3, 3)
+      ! @ input r: Rotation from initial to deformed config. (3, 3)
+      ! @ returns: Weight vector normal to cross-section (3, )
+      pure function weight_rotater(w_ref, r0, r) result(w_def)
+      ! Input and output
+      real(8), intent(in) ::  w_ref(3, 3), r0(3, 3), r(3, 3)
+      real(8)             ::  w_def(3)
+      ! Internal
+      real(8)             ::  t0(3), rtot(3, 3)
+      ! Function start
+      t0 = r0(:, 3)
+      rtot = matmul(r, r0)
+      w_def = matmul(matmul(rtot, matmul(w_ref, transpose(rtot))), t0)
       end function
 C ******************************************************************** C
 C     Extract rotation vector from quaternion
