@@ -54,7 +54,8 @@ C
       real(8), allocatable  :: c_mat(:, :), d_mat(:, :), g_mat(:, :), 
      1                         q_mat(:, :), x_shell_def(:, :),
      2                         x_shell(:, :), u_shell(:, :), 
-     3                         w_lin(:), psi_all(:), weights(:, :)
+     3                         w_lin(:), psi_all(:), weights(:, :),
+     4                         x_shell_ref(:, :)
       ! For the rotation quaternion and computations
       real(8)               :: b_mat(quatdim, quatdim), 
      1                         beta(quatdim, quatdim)
@@ -71,6 +72,7 @@ C
       allocate(x_shell(ndim, n_shell))
       allocate(u_shell(ndim, n_shell))
       allocate(x_shell_def(ndim, n_shell))
+      allocate(x_shell_ref(ndim, n_shell))
       allocate(c_mat(ndim, n_shell))
       allocate(d_mat(ndim, n_shell))
       allocate(g_mat(ndim, ndim * n_shell))
@@ -110,8 +112,9 @@ C ******************************************************************** C
       ! it's valid to calculate the centroid first.
       ! The first n_shell values are the area weights, the rest are 
       ! shear weights.
-      weights = calc_weights(matmul(transpose(r_ref), c_mat), n_shell, 
-     1                       jtype)
+      ! todo: pass x_shell_ref where needed
+      x_shell_ref = matmul(transpose(r_ref), c_mat)
+      weights = calc_weights(x_shell_ref, n_shell, jtype)
       total_weight = zero
       do i = 1, n_shell
         total_weight = total_weight + weights(1, i)
@@ -299,7 +302,7 @@ C ******************************************************************** C
       integer :: lwmax
       parameter(lwmax = 1000)
       integer             ::  isuppz(ne), iwork(lwmax)
-      real(8)             ::  ae(lda, ne), w(ne), z(ldz, nselect), 
+      real(8)             ::  w(ne), z(ldz, nselect), 
      1                        work(lwmax)
       external dsyevr
       !
@@ -336,7 +339,6 @@ C ******************************************************************** C
       real(8), intent(in)   ::  lam
       real(8)               ::  g(3, 3*n_sh)
       ! Internal
-      integer               ::  sz(2)
       real(8)               ::  qrr(4, 4), qrr_3(4, 3), xinv(3, 3), 
      1                          id4(4, 4)
       real(8)               ::  a_temp(3, n_sh)
@@ -379,7 +381,6 @@ C ******************************************************************** C
       real(8), intent(in)   ::  q(4), g(3, 3*n_sh)
       real(8)               ::  qq(3, 3*n_sh)
       ! Internal
-      integer               ::  sz(2)
       real(8)               ::  qrr(4, 4), qrr_3(4, 3)
       ! Function start
       ! Compute the linearized rotation matrix
@@ -435,7 +436,7 @@ C ******************************************************************** C
       real(8), intent(in) ::  init_pts(3, n_sh)
       real(8)             ::  o(3, 3)
       ! Internal
-      integer             :: ne, nselect, mat_shape(2)
+      integer             :: ne, nselect
       parameter             (ne = 3, nselect = 3)
       integer             :: lda, ldz
       parameter             (lda = ne, ldz = ne)
@@ -570,7 +571,7 @@ C ******************************************************************** C
       real(8)               ::  w_linear(3*n_sh)
       ! Internal
       integer               ::  i
-      real(8)               ::  bimom, w_tensor(3, 3), c2(3, n_sh)
+      real(8)               ::  bimom, w_tensor(3, 3), c2(3, n_sh), d_cl
       real(8)               ::  zero_tol
       parameter                 (zero_tol=1.d-6)
       ! Rotate from the initial config to the reference config
@@ -656,17 +657,15 @@ C ******************************************************************** C
       !   - The weight represents the equivalent area of each node
       !   - tf_tw_code is defined as [d][tf][tw], where d is the number
       !     of decimals in tf and tw
-      !   - tf and tw are defined as tf = t_f; tw = E_w / E_f * t_w 
-      !     to account for differences in elastic moduli
       !   - The weights are only valid if the interface is elastic
       !   - The flange and web mesh distances are assumed to be constant
       !     between nodes
-      pure function calc_weights(p, n_sh, tf_tw_code) result(w)
+      pure function calc_weights(p, n_sh, tf_tw_code) result(ww)
       ! Input and output
       integer, intent(in)   ::  n_sh
       real(8), intent(in)   ::  p(3, n_sh)
       integer, intent(in)   ::  tf_tw_code
-      real(8)               ::  w(4, n_sh)
+      real(8)               ::  ww(4, n_sh)
       ! Internal variables
       ! Tags for node positions
       integer               ::  web_tag, flange_tag, corner_tag, 
@@ -679,7 +678,7 @@ C ******************************************************************** C
      1                          joint_weight
       real(8)               ::  tf, tw, delta_f, delta_w, x_max, y_max,
      1                          pt(3), x_max_2, y_max_2
-      integer               ::  i, d_digits, deci, n_digits, c, tf_tw
+      integer               ::  ii, d_digits, deci, n_digits, c, tf_tw
       ! For shear weights
       real(8) ::  width, depth, v_weights(n_sh, 3)
       ! Tolerance in positions
@@ -691,23 +690,23 @@ C ******************************************************************** C
       classification(:) = 0
       x_max = maxval(p(1, :))
       y_max = maxval(p(2, :))
-      do i = 1, n_sh
-        pt = p(:, i)
+      do ii = 1, n_sh
+        pt = p(:, ii)
         if (abs(pt(1)) < zero_tol) then
           ! Point is on the web
-          classification(i) = web_tag
+          classification(ii) = web_tag
         end if
         if (abs(abs(pt(2)) - y_max) < zero_tol) then
           ! Point is on the flange
-          if (classification(i) == web_tag) then
+          if (classification(ii) == web_tag) then
             ! Point is on the web and flange
-            classification(i) = joint_tag;
+            classification(ii) = joint_tag;
           else if (abs(abs(pt(1)) - x_max) < zero_tol) then
             ! Point is on the corner of the flange
-            classification(i) = corner_tag
+            classification(ii) = corner_tag
           else
             ! Just on the flange
-            classification(i) = flange_tag
+            classification(ii) = flange_tag
           end if
         end if
       end do
@@ -716,9 +715,9 @@ C ******************************************************************** C
       ! Start search for 2nd greatest values
       x_max_2 = -x_max
       y_max_2 = -y_max
-      do i = 1, n_sh
-        pt = p(:, i)
-        c = classification(i)
+      do ii = 1, n_sh
+        pt = p(:, ii)
+        c = classification(ii)
         ! Web
         if (c == web_tag) then
           ! Set 2nd largest y value
@@ -748,8 +747,8 @@ C ******************************************************************** C
       deci = tf_tw_code / 10 ** d_digits
       ! The number of digits in each thickness is assumed to be equal
       n_digits = d_digits / 2
-      ! The thickness values are what is left after we subtract the deci 
-      ! value from the front
+      ! The thickness values are what is left after we subtract the 
+      ! decimal value from the front
       tf_tw = tf_tw_code - deci * (10 ** d_digits)
       ! Use the same subtracting off-the-front to get the tf and then tw
       ! The int casting is to truncate the un-needed digits
@@ -770,19 +769,19 @@ C ******************************************************************** C
       v_weights = shear_factors(p, n_sh, depth, width, tf, tw, 
      1                          delta_f, delta_w, classification)
       ! Assign the area weights
-      do i = 1, n_sh
-        c = classification(i)
+      do ii = 1, n_sh
+        c = classification(ii)
         if (c == web_tag) then
-          w(1, i) = web_weight
+          ww(1, ii) = web_weight
         else if (c == flange_tag) then
-          w(1, i) = flange_weight
+          ww(1, ii) = flange_weight
         else if (c == corner_tag) then
-          w(1, i) = corner_weight
+          ww(1, ii) = corner_weight
         else if (c == joint_tag) then
-          w(1, i) = joint_weight
+          ww(1, ii) = joint_weight
         end if
         ! Add the shear weights
-        w(2:4, i) = v_weights(i, :)
+        ww(2:4, ii) = v_weights(ii, :)
       end do
       end function
 C ******************************************************************** C
@@ -955,8 +954,8 @@ C ******************************************************************** C
       pure function calc_disp_lin(n_sh, w_all, a_total, r0, r) 
      1              result(u_lin)
       ! Input and output
-      real(8), intent(in) ::  w_all(4, n_sh), a_total, r0(3, 3), r(3, 3)
       integer, intent(in) ::  n_sh
+      real(8), intent(in) ::  w_all(4, n_sh), a_total, r0(3, 3), r(3, 3)
       real(8)             ::  u_lin(3, 3 * n_sh)
       ! Internal variables
       real(8)             ::  we(3, 3), rr0(3, 3)
