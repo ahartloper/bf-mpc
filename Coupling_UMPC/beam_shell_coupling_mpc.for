@@ -963,19 +963,23 @@ C ******************************************************************** C
       
       ! Function start
       do i = 1, n_sh
+        ! Weak axis shear
         we = 0.d0
-        ! Weak axis force due to weak axis displacement
-        we(1, 1) = w_all(3, i)
-        ! Weak axis force in flange due to strong axis displacement
-        we(2, 1) = w_all(4, i)
-        ! Strong axis force due to strong axis displacement
-        we(2, 2) = w_all(2, i)
+        we(3, 1) = w_all(3, i)
+        we(1, 3) = w_all(3, i)
+        u_lin(1, 3*i-2:3*i) = weight_rotater(we, r0, r) 
+        ! Strong axis shear
+        we = 0.d0
+        we(3, 1) = w_all(4, i)
+        we(1, 3) = w_all(4, i)
+        we(2, 3) = w_all(2, i)
+        we(3, 2) = w_all(2, i)
+        u_lin(2, 3*i-2:3*i) = weight_rotater(we, r0, r) 
+        
         ! Axial force due to axial displacement
+        we = 0.d0
         we(3, 3) = w_all(1, i) / a_total
-        ! Rotate the weights from the reference to the deformed config
-        ! w_rotated = r0.t * r.t * we * r * r0
-        rr0 = matmul(r, r0)
-        u_lin(:, 3*i-2:3*i) = matmul(rr0, matmul(we, transpose(rr0)))
+        u_lin(3, 3*i-2:3*i) = weight_rotater(we, r0, r)
       end do
       end function
 C ******************************************************************** C
