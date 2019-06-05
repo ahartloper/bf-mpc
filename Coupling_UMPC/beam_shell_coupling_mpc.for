@@ -41,7 +41,7 @@ C
       ! Loop counters
       integer               :: i, i_sh
       ! Nodal weight factors
-      real(8)               :: total_weight
+      real(8)               :: total_weight, w_ish
       ! Warping amplitude
       real(8)               :: w_amp
       ! Centroids (deformed and initial)
@@ -107,7 +107,7 @@ C ******************************************************************** C
       end do
       r_ref = ini_config(c_mat, n_shell)
       
-      ! Calculate the nodal weights
+      ! Calculate the nodal weights for displacement linearization
       ! The centroid does not depend on the weights due to symmetry so
       ! it's valid to calculate the centroid first.
       ! The first n_shell values are the area weights, the rest are 
@@ -124,7 +124,8 @@ C ******************************************************************** C
       b_mat(:, :) = zero
       do i = 1, n_shell
         beta = left_quat(zero,d_mat(:, i))- right_quat(zero,c_mat(:, i))
-        b_mat = b_mat + weights(1, i) * matmul(transpose(beta), beta)
+        b_mat = b_mat + weights(1, i) / total_weight 
+     1          * matmul(transpose(beta), beta)
       end do
       lam_q = calc_opquat(b_mat)
       lambda = lam_q(1)
@@ -158,12 +159,13 @@ C ******************************************************************** C
       do i = 2, n
         ! Index corresponding to the shell nodes
         i_sh = i - 1
+        w_ish = weights(1, i_sh) / total_weight
         ! Displacement constraints
         a(1:3, 1:3, i) = -disp_lin(1:3, 3*i_sh-2:3*i_sh)
         ! Rotation constraints
-        a(4, 1:3, i) = -q_mat(1, 3*i_sh-2:3*i_sh) * weights(1, i_sh)
-        a(5, 1:3, i) = -q_mat(2, 3*i_sh-2:3*i_sh) * weights(1, i_sh)
-        a(6, 1:3, i) = -q_mat(3, 3*i_sh-2:3*i_sh) * weights(1, i_sh)
+        a(4, 1:3, i) = -q_mat(1, 3*i_sh-2:3*i_sh) * w_ish
+        a(5, 1:3, i) = -q_mat(2, 3*i_sh-2:3*i_sh) * w_ish
+        a(6, 1:3, i) = -q_mat(3, 3*i_sh-2:3*i_sh) * w_ish
         ! Warping constraint
         a(7, 1:3, i) = -w_lin(3*i_sh-2:3*i_sh)
         ! Set the active DOF (displacement) in the shell elements
