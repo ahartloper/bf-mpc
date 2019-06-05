@@ -207,12 +207,12 @@ C ******************************************************************** C
       real(8), intent(in) :: v0
       real(8), intent(in) :: v(3)
       real(8)             :: ql(4, 4)
-      integer             :: i
+      integer             :: ii
       ! 
       ql(:, 1) = [ v0, v(:) ]
       ql(1, 2:4) = -v(:)
       ql(2:4, 2:4) = skew_sym(v)
-      forall(i = 1:3) ql(1 + i, 1 + i) = ql(1 + i, 1 + i) + v0
+      forall(ii = 1:3) ql(1 + ii, 1 + ii) = ql(1 + ii, 1 + ii) + v0
       end function
 C ******************************************************************** C
 C     Right quaternion representation from 3 element vector
@@ -226,12 +226,12 @@ C ******************************************************************** C
       real(8), intent(in) :: v0
       real(8), intent(in) :: v(3)
       real(8)             :: qr(4, 4)
-      integer             :: i
+      integer             :: ii
       !
       qr(:, 1) = [ v0, v(:) ]
       qr(1, 2:4) = -v(:)
       qr(2:4, 2:4) = -skew_sym(v)   
-      forall(i = 1:3) qr(1 + i, 1 + i) = qr(1 + i, 1 + i) + v0   
+      forall(ii = 1:3) qr(1 + ii, 1 + ii) = qr(1 + ii, 1 + ii) + v0   
       end function
 C ******************************************************************** C
 C     Rotation matrix from quaternion
@@ -491,28 +491,28 @@ C ******************************************************************** C
       real(8), intent(in)   :: c(3, n_sh), r0(3, 3)
       real(8)               :: psi(n_sh), c2(3, n_sh)
       ! Internal
-      real(8)             :: s, s1, s2, two, four, tol
-      parameter              (two = 2.d0, four = 4.d0, tol = 1.d-8)
-      integer             :: i
+      real(8)             :: s, s1, s2, two2, four, tol
+      parameter              (two2 = 2.d0, four = 4.d0, tol = 1.d-8)
+      integer             :: ii
       ! Allocate array
       ! Rotate from the initial config to the reference config
       c2 = matmul(transpose(r0), c)
       ! Calculate the width and depth of the section
-      s1 = two * maxval(c2(1, :))
-      s2 = two * maxval(c2(2, :))
+      s1 = two2 * maxval(c2(1, :))
+      s2 = two2 * maxval(c2(2, :))
       ! Calculate the warping function, \psi = X*Y
-      do i = 1, n_sh
-        if (abs(c2(2, i) - s2 / two ) < tol) then
+      do ii = 1, n_sh
+        if (abs(c2(2, ii) - s2 / two2 ) < tol) then
           ! Node is on the top flange
-          s = c2(1, i) + s1 / two
-          psi(i) = -s2 * (s1 - two * s) / four
-        else if (abs(c2(2, i) + s2 / two ) < tol) then
+          s = c2(1, ii) + s1 / two2
+          psi(ii) = -s2 * (s1 - two2 * s) / four
+        else if (abs(c2(2, ii) + s2 / two2 ) < tol) then
           ! Node is on the bottom flange
-          s = c2(1, i) + s1 / two
-          psi(i) = s2 * (s1 - two * s) / four
+          s = c2(1, ii) + s1 / two2
+          psi(ii) = s2 * (s1 - two2 * s) / four
         else
           ! Node is on the web line
-          psi(i) = 0.d0
+          psi(ii) = 0.d0
         end if
       end do
       end function
@@ -533,17 +533,18 @@ C ******************************************************************** C
       real(8), intent(in) ::  r(3, 3), psi(:)
       real(8)             ::  w
       ! Internal
-      integer             :: i, non_zero_nodes, sz(2)
+      integer             :: ii, non_zero_nodes, sz(2)
       real(8)             :: zero_tol
       parameter              (zero_tol=1.d-6)
       ! Function start
       sz = shape(x_def)
       w = 0.d0
       non_zero_nodes = 0
-      do i = 1, sz(2)
-        if (abs(psi(i)) > zero_tol) then
+      do ii = 1, sz(2)
+        if (abs(psi(ii)) > zero_tol) then
           non_zero_nodes = non_zero_nodes + 1
-          w=w+dot_product(t,x_def(:,i)-matmul(r,x_ref(:, i)+u_c))/psi(i)
+          w = w + dot_product(t, x_def(:, ii)
+     1        - matmul(r, x_ref(:, ii) + u_c)) / psi(ii)
         end if
       end do
       w = w / non_zero_nodes
@@ -572,7 +573,7 @@ C ******************************************************************** C
       real(8), intent(in)   ::  n_area(n_sh)
       real(8)               ::  w_linear(3*n_sh)
       ! Internal
-      integer               ::  i
+      integer               ::  ii
       real(8)               ::  bimom, w_tensor(3, 3), c2(3, n_sh), d_cl
       real(8)               ::  zero_tol
       parameter                 (zero_tol=1.d-6)
@@ -581,14 +582,14 @@ C ******************************************************************** C
       ! Assemble the linearized warping vector
       w_linear = 0.d0
       bimom = 0.d0
-      do i = 1, n_sh
-        if (abs(psi(i)) > zero_tol) then
+      do ii = 1, n_sh
+        if (abs(psi(ii)) > zero_tol) then
           ! todo: bimom can be calculated in the function with psi
-          bimom = bimom + abs(c2(1, i) * psi(i) * n_area(i))
+          bimom = bimom + abs(c2(1, ii) * psi(ii) * n_area(ii))
           w_tensor = 0.d0
           ! Warping only causes axial stress (in 33 direction)
-          w_tensor(3, 3) = psi(i) * n_area(i)
-          w_linear(3*i-2:3*i) = weight_rotater(w_tensor, r0, r)
+          w_tensor(3, 3) = psi(ii) * n_area(ii)
+          w_linear(3*ii-2:3*ii) = weight_rotater(w_tensor, r0, r)
         end if
       end do
       ! Normalize by the total bimoment to satisfy equilibrium
@@ -895,7 +896,7 @@ C ******************************************************************** C
       ! Internal variables
       real(8)             ::  d1, tau(2), total_strong, total_weak,
      1                        p_corner(3), tau_2, d_cl
-      integer             ::  i, c
+      integer             ::  ii, c
       ! Classification tags
       integer             ::  web_tag, flange_tag, corner_tag, 
      1                        joint_tag
@@ -909,32 +910,32 @@ C ******************************************************************** C
       d_cl = d - tf
       total_strong = 0.
       total_weak = 0.
-      do i = 1, n_sh
-        c = c_tags(i)
+      do ii = 1, n_sh
+        c = c_tags(ii)
         if (c == web_tag) then
-          tau = tw * delta_w * shear_web(p(:, i), d, d1, bf, tf, tw)
+          tau = tw * delta_w * shear_web(p(:, ii), d, d1, bf, tf, tw)
           ! Don't consider the complementary shear for the web
           tau_2 = 0.
         else if (c == flange_tag) then
-          tau = tf * delta_f * shear_flange(p(:, i), d, d1, bf, tf, tw)
-          tau_2 = tf * delta_f * comp_shear_flange(p(:, i), d_cl, bf)
+          tau = tf * delta_f * shear_flange(p(:, ii), d, d1, bf, tf, tw)
+          tau_2 = tf * delta_f * comp_shear_flange(p(:, ii), d_cl, bf)
         else if (c == corner_tag) then
           ! Sample at one-half element distance towards the web
-          p_corner(1) = -sign(1., p(1, i)) * delta_f / 2.
+          p_corner(1) = -sign(1., p(1, ii)) * delta_f / 2.
           p_corner(2:3) = 0.
-          p_corner = p(:, i) + p_corner
+          p_corner = p(:, ii) + p_corner
           tau = tf*delta_f/2.* shear_flange(p_corner, d, d1, bf, tf, tw)
           tau_2 = tf * delta_f / 2.* comp_shear_flange(p_corner,d_cl,bf)
         else
-          tau = tf * delta_f * shear_flange(p(:, i), d, d1, bf, tf, tw)
-          tau = tau+ tw*delta_w/2.*shear_web(p(:, i), d, d1, bf, tf, tw)
+          tau = tf * delta_f * shear_flange(p(:, ii), d, d1, bf, tf, tw)
+          tau = tau+ tw*delta_w/2.*shear_web(p(:, ii), d, d1, bf, tf, tw)
           ! Complementary shear cancels from both sides at the joint
           tau_2 = 0.
         end if
         total_strong = total_strong + tau(1)
         total_weak = total_weak + tau(2)
-        v(i, 1:2) = tau
-        v(i, 3) = tau_2
+        v(ii, 1:2) = tau
+        v(ii, 3) = tau_2
       end do
       
       ! Normalize the weights, the complementary takes the same 
@@ -961,23 +962,23 @@ C ******************************************************************** C
       real(8)             ::  u_lin(3, 3 * n_sh)
       ! Internal variables
       real(8)             ::  we(3, 3), rr0(3, 3)
-      integer             ::  i   
+      integer             ::  ii   
       
       ! Function start
-      do i = 1, n_sh
+      do ii = 1, n_sh
         we = 0.d0
         ! Weak axis force due to weak axis displacement
-        we(1, 1) = w_all(3, i)
+        we(1, 1) = w_all(3, ii)
         ! Weak axis force in flange due to strong axis displacement
-        we(2, 1) = w_all(4, i)
+        we(2, 1) = w_all(4, ii)
         ! Strong axis force due to strong axis displacement
-        we(2, 2) = w_all(2, i)
+        we(2, 2) = w_all(2, ii)
         ! Axial force due to axial displacement
-        we(3, 3) = w_all(1, i) / a_total
+        we(3, 3) = w_all(1, ii) / a_total
         ! Rotate the weights from the reference to the deformed config
         ! w_rotated = r0.t * r.t * we * r * r0
         rr0 = matmul(r, r0)
-        u_lin(:, 3*i-2:3*i) = matmul(rr0, matmul(we, transpose(rr0)))
+        u_lin(:, 3*ii-2:3*ii) = matmul(rr0, matmul(we, transpose(rr0)))
       end do
       end function
 C ******************************************************************** C
