@@ -118,7 +118,7 @@ C ******************************************************************** C
       total_weight = zero
       do i = 1, n_shell
         total_weight = total_weight + weights(1, i)
-      end do
+      end do      
       
       ! Compute the optimal rotation quaternion
       b_mat(:, :) = zero
@@ -501,15 +501,18 @@ C ******************************************************************** C
       s1 = two2 * maxval(c2(1, :))
       s2 = two2 * maxval(c2(2, :))
       ! Calculate the warping function, \psi = X*Y
+      ! todo: clean this function up
       do ii = 1, n_sh
         if (abs(c2(2, ii) - s2 / two2 ) < tol) then
           ! Node is on the top flange
           s = c2(1, ii) + s1 / two2
-          psi(ii) = -s2 * (s1 - two2 * s) / four
+          !psi(ii) = -s2 * (s1 - two2 * s) / four
+          psi(ii) = c2(1, ii) * c2(2, ii)
         else if (abs(c2(2, ii) + s2 / two2 ) < tol) then
           ! Node is on the bottom flange
           s = c2(1, ii) + s1 / two2
-          psi(ii) = s2 * (s1 - two2 * s) / four
+          !psi(ii) = s2 * (s1 - two2 * s) / four
+          psi(ii) = c2(1, ii) * c2(2, ii)
         else
           ! Node is on the web line
           psi(ii) = 0.d0
@@ -520,18 +523,18 @@ C ******************************************************************** C
 C     Calculate the warping amplitude
 C ******************************************************************** C
       ! Returns the value of the warping amplitude.
-      ! @ input x_ref: pos. of each node in the initial configuration
+      ! @ input x_ini: pos. of each node in the initial configuration
       ! @ input x_def: pos. of each node in the deformed configuration
       ! @ input u_c: Translation of the centroid
       ! @ input t: Orientation of the normal to the cross-section
       ! @ input r: Rotation from initial to deformed configurations
       ! @ input psi: Warping function at each node
       ! @ returns w: Warping amplitude
-      pure function warp_amp(x_ref, x_def, u_c, t, r, psi) result(w)
+      pure function warp_amp(x_ini, x_def, u_c, t, r, psi) result(w)
       ! Input and output
-      real(8), intent(in) ::  x_def(:, :), x_ref(:, :), u_c(3), t(3)
+      real(8), intent(in) ::  x_def(:, :), x_ini(:, :), u_c(3), t(3)
       real(8), intent(in) ::  r(3, 3), psi(:)
-      real(8)             ::  w
+      real(8)             ::  w, resid(3)
       ! Internal
       integer             :: ii, non_zero_nodes, sz(2)
       real(8)             :: zero_tol
@@ -543,8 +546,8 @@ C ******************************************************************** C
       do ii = 1, sz(2)
         if (abs(psi(ii)) > zero_tol) then
           non_zero_nodes = non_zero_nodes + 1
-          w = w + dot_product(t, x_def(:, ii)
-     1        - matmul(r, x_ref(:, ii) + u_c)) / psi(ii)
+          resid = x_def(1:3, ii) - matmul(r, x_ini(1:3, ii) + u_c)
+          w = w + dot_product(t, resid) / psi(ii)
         end if
       end do
       w = w / non_zero_nodes
@@ -574,7 +577,8 @@ C ******************************************************************** C
       real(8)               ::  w_linear(3*n_sh)
       ! Internal
       integer               ::  ii
-      real(8)               ::  bimom, w_tensor(3, 3), c2(3, n_sh), d_cl
+      real(8)               ::  bimom, w_warp(3, 3), c2(3, n_sh), d_cl
+      real(8)               ::  t_bar(3), rtot_T(3, 3)
       real(8)               ::  zero_tol
       parameter                 (zero_tol=1.d-6)
       ! Rotate from the initial config to the reference config
@@ -582,41 +586,23 @@ C ******************************************************************** C
       ! Assemble the linearized warping vector
       w_linear = 0.d0
       bimom = 0.d0
+      t_bar = matmul(r, r0(:, 3))
+      rtot_T = transpose(matmul(r, r0))
       do ii = 1, n_sh
         if (abs(psi(ii)) > zero_tol) then
           ! todo: bimom can be calculated in the function with psi
           bimom = bimom + abs(c2(1, ii) * psi(ii) * n_area(ii))
-          w_tensor = 0.d0
           ! Warping only causes axial stress (in 33 direction)
-          w_tensor(3, 3) = psi(ii) * n_area(ii)
-          w_linear(3*ii-2:3*ii) = weight_rotater(w_tensor, r0, r)
+          w_warp = 0.d0
+          w_warp(3, 3) = psi(ii) * n_area(ii)
+          w_linear(3*ii-2:3*ii) = psi(ii) * n_area(ii) * t_bar
         end if
       end do
       ! Normalize by the total bimoment to satisfy equilibrium
       ! B = (M_f,t + M_f,b) * (d_cl / 2)
       d_cl = maxval(c2(2, :))
       bimom = bimom * d_cl
-      w_linear = w_linear / bimom      
-      end function
-C ******************************************************************** C
-C     Rotate weight tensors into the deformed configuration
-C ******************************************************************** C
-      ! Returns the weight vector in the deformed configuration given
-      !   a tensor in the reference configuration.
-      ! @ input w_ref: Weight tensor in reference config. (3, 3)
-      ! @ input r0: Rotation from reference to initial config. (3, 3)
-      ! @ input r: Rotation from initial to deformed config. (3, 3)
-      ! @ returns: Weight vector normal to cross-section (3, )
-      pure function weight_rotater(w_ref, r0, r) result(w_def)
-      ! Input and output
-      real(8), intent(in) ::  w_ref(3, 3), r0(3, 3), r(3, 3)
-      real(8)             ::  w_def(3)
-      ! Internal
-      real(8)             ::  t0(3), rtot(3, 3)
-      ! Function start
-      t0 = r0(:, 3)
-      rtot = matmul(r, r0)
-      w_def = matmul(matmul(rtot, matmul(w_ref, transpose(rtot))), t0)
+      w_linear = w_linear / bimom
       end function
 C ******************************************************************** C
 C     Extract rotation vector from quaternion
@@ -928,7 +914,7 @@ C ******************************************************************** C
           tau_2 = tf * delta_f / 2.* comp_shear_flange(p_corner,d_cl,bf)
         else
           tau = tf * delta_f * shear_flange(p(:, ii), d, d1, bf, tf, tw)
-          tau = tau+ tw*delta_w/2.*shear_web(p(:, ii), d, d1, bf, tf, tw)
+          tau = tau+tw*delta_w/2.*shear_web(p(:, ii), d, d1, bf, tf, tw)
           ! Complementary shear cancels from both sides at the joint
           tau_2 = 0.
         end if
@@ -961,24 +947,36 @@ C ******************************************************************** C
       real(8), intent(in) ::  w_all(4, n_sh), a_total, r0(3, 3), r(3, 3)
       real(8)             ::  u_lin(3, 3 * n_sh)
       ! Internal variables
-      real(8)             ::  we(3, 3), rr0(3, 3)
+      real(8)             ::  w_bar(3, 3), rr0(3, 3), s_bar(3, 3), 
+     1                        t_bar(3), s(3, 3), rr0_T(3, 3)
       integer             ::  ii   
       
       ! Function start
+      t_bar = r(:, 3)
+      rr0 = matmul(r, r0)
+      rr0_T = transpose(rr0)
       do ii = 1, n_sh
-        we = 0.d0
         ! Weak axis force due to weak axis displacement
-        we(1, 1) = w_all(3, ii)
+        w_bar = 0.d0
+        w_bar(1, 3) = w_all(3, ii)
+        w_bar(3, 1) = w_all(3, ii)
+        s_bar(:, 1) = matmul(w_bar, t_bar)
         ! Weak axis force in flange due to strong axis displacement
-        we(2, 1) = w_all(4, ii)
+        w_bar = 0.d0
+        w_bar(3, 1) = w_all(4, ii)
+        w_bar(1, 3) = w_all(4, ii)
         ! Strong axis force due to strong axis displacement
-        we(2, 2) = w_all(2, ii)
+        w_bar(3, 2) = w_all(2, ii)
+        w_bar(2, 3) = w_all(2, ii)
+        s_bar(:, 2) = matmul(w_bar, t_bar)
         ! Axial force due to axial displacement
-        we(3, 3) = w_all(1, ii) / a_total
+        w_bar = 0.d0
+        w_bar(3, 3) = w_all(1, ii) / a_total
+        s_bar(:, 3) = matmul(w_bar, t_bar)
         ! Rotate the weights from the reference to the deformed config
         ! w_rotated = r0.t * r.t * we * r * r0
-        rr0 = matmul(r, r0)
-        u_lin(:, 3*ii-2:3*ii) = matmul(rr0, matmul(we, transpose(rr0)))
+        s = matmul(rr0_T, matmul(s_bar, rr0))
+        u_lin(:, 3*ii-2:3*ii) = transpose(s)
       end do
       end function
 C ******************************************************************** C
