@@ -952,7 +952,7 @@ C ******************************************************************** C
       integer             ::  ii   
       
       ! Function start
-      t_bar = r(:, 3)
+      t_bar = r0(:, 3)
       rr0 = matmul(r, r0)
       rr0_T = transpose(rr0)
       do ii = 1, n_sh
@@ -974,8 +974,7 @@ C ******************************************************************** C
         w_bar(3, 3) = w_all(1, ii) / a_total
         s_bar(:, 3) = matmul(w_bar, t_bar)
         ! Rotate the weights from the reference to the deformed config
-        ! w_rotated = r0.t * r.t * we * r * r0
-        s = matmul(rr0_T, matmul(s_bar, rr0))
+        s = matmul(rr0, matmul(s_bar, rr0_T))
         u_lin(:, 3*ii-2:3*ii) = transpose(s)
       end do
       end function
