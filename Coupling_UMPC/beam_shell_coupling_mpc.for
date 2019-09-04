@@ -41,7 +41,7 @@ C
       ! Loop counters
       integer               :: i, i_sh
       ! Nodal weight factors
-      real(8)               :: total_weight, w_ish
+      real(8)               :: total_area, a_node
       ! Warping amplitude
       real(8)               :: w_amp
       ! Centroids (deformed and initial)
@@ -57,13 +57,18 @@ C
      3                         w_lin(:), psi_all(:), weights(:, :),
      4                         x_shell_ref(:, :)
       ! For the rotation quaternion and computations
-      real(8)               :: b_mat(quatdim, quatdim), 
-     1                         beta(quatdim, quatdim)
+      real(8)               ::  b_mat(quatdim, quatdim), 
+     1                          beta(quatdim, quatdim), 
+     2                          beta_T(quatdim, quatdim)
       real(8)               :: op_quat(quatdim)
       real(8)               :: lambda
       real(8)               :: lam_q(quatdim+1)
       ! Linearized displacment
+      integer               ::  k_inner, n_inner
       real(8), allocatable  ::  disp_lin(:, :)
+      real(8)               ::  temp33(3, 3)
+      ! Defines the number of inner iterations to do
+      parameter                 (n_inner=3)
       ! Numerical parameters
       real(8)               :: one, two, zero
       parameter                (one=1.0d0, two=2.0d0, zero=0.d0)
@@ -90,82 +95,95 @@ C ******************************************************************** C
       u_shell = u(1:3, 2:n)
       x_shell_def = x_shell + u_shell
       xc0(:) = zero
-      xc(:) = zero
       do i = 1, n_shell
         xc0(:) = xc0(:) + x_shell(:, i)
-        xc(:) = xc(:) + x_shell_def(:, i)
       end do
       n_reciprocal = one / n_shell
       xc0 = xc0 * n_reciprocal
-      xc = xc * n_reciprocal
-      u_cent = xc - xc0
       
       ! Find the reference orientation
       do i = 1, n_shell
         c_mat(:, i) = x_shell(:, i) - xc0
-        d_mat(:, i) = x_shell_def(:, i) - xc
       end do
       r_ref = ini_config(c_mat, n_shell)
       
       ! Calculate the nodal weights for displacement linearization
-      ! The centroid does not depend on the weights due to symmetry so
-      ! it's valid to calculate the centroid first.
-      ! The first n_shell values are the area weights, the rest are 
-      ! shear weights.
       ! todo: pass x_shell_ref where needed
       x_shell_ref = matmul(transpose(r_ref), c_mat)
       weights = calc_weights(x_shell_ref, n_shell, jtype)
-      total_weight = zero
+      total_area = zero
       do i = 1, n_shell
-        total_weight = total_weight + weights(1, i)
+        total_area = total_area + weights(1, i)
       end do      
       
-      ! Compute the optimal rotation quaternion
-      b_mat(:, :) = zero
+      ! Initialize the linearization to the arithmetic mean
+      temp33 = zero
+      temp33(1, 1) = n_reciprocal
+      temp33(2, 2) = n_reciprocal
+      temp33(3, 3) = n_reciprocal
       do i = 1, n_shell
-        beta = left_quat(zero,d_mat(:, i))- right_quat(zero,c_mat(:, i))
-        b_mat = b_mat + weights(1, i) / total_weight 
-     1          * matmul(transpose(beta), beta)
+        disp_lin(1:3, 3*i-2:3*i) = temp33
       end do
-      lam_q = calc_opquat(b_mat)
-      lambda = lam_q(1)
-      op_quat = lam_q(2:5)
-      ! Make the first entry always positive
-      op_quat = sign(one, op_quat(1)) * op_quat  
-      
+      ! Iterate until convergence using the displacement linearization 
+      ! for the centroid
+      do k_inner = 1, n_inner
+        u_cent(1:3) = zero
+        do i = 1, n_shell
+          temp33 = disp_lin(1:3, 3*i-2:3*i)
+          u_cent(1:3) = u_cent(1:3) + matmul(temp33, u_shell(1:3, i))
+        end do
+        xc = xc0 + u_cent
+        do i = 1, n_shell
+          d_mat(:, i) = x_shell_def(:, i) - xc
+        end do
+
+        ! Compute the optimal rotation quaternion
+        b_mat(:, :) = zero
+        do i = 1, n_shell
+          beta=left_quat(zero,d_mat(:,i))-right_quat(zero,c_mat(:,i))
+          beta_T = transpose(beta)
+          b_mat = b_mat+weights(1,i)/total_area*matmul(beta_T,beta)
+        end do
+        lam_q = calc_opquat(b_mat)
+        lambda = lam_q(1)
+        op_quat = lam_q(2:5)
+        ! Make the first entry always positive
+        op_quat = sign(one, op_quat(1)) * op_quat  
+        r_mat = rot_mat(op_quat)
+        
+        ! Compute the linearized centroid displacement
+        disp_lin=calc_disp_lin(n_shell,weights,total_area,r_ref,r_mat)
+      end do  ! over k_inner
+
       ! Compute the linearized rotation matrix
-      r_mat = rot_mat(op_quat)
       g_mat = calc_g(op_quat, n_shell, b_mat, c_mat, lambda, r_mat)
       q_mat = calc_q(op_quat, n_shell, g_mat)
       
       ! Compute the warping amplitude
       psi_all = warp_fun(c_mat, n_shell, r_ref)
       t_def = matmul(r_mat, r_ref(:, 3))
-      w_amp = warp_amp(x_shell, x_shell_def, u_cent, t_def, r_mat,
-     1                 psi_all)
+      w_amp = warp_amp(x_shell,x_shell_def,u_cent,t_def,r_mat,psi_all)
      
-      ! Compute the linearized warping
-      w_lin = calc_lin_w(c_mat, n_shell, psi_all, r_ref, r_mat, 
+      ! Compute the linearized warping 
+      w_lin =calc_lin_w(x_shell_def,n_shell,r_ref(:,3),psi_all,r_mat,
      1                   weights(1, :))
       
       ! Compute the linearized centroid displacement
-      disp_lin = calc_disp_lin(n_shell, weights, total_weight, r_ref, 
-     1                         r_mat)
+        disp_lin=calc_disp_lin(n_shell,weights,total_area,r_ref,r_mat)
+     
       ! Assign the A submatrix for the beam node and set active DOF
       forall(i = 1:maxdof) a(i, i, 1) = one
       forall(i = 1:maxdof) jdof(i, 1) = i
       
       ! Assign the A submatrices for the shell nodes
       do i = 2, n
-        ! Index corresponding to the shell nodes
+        ! i_sh corresponds to the shell nodes since i starts at 2
         i_sh = i - 1
-        w_ish = weights(1, i_sh) / total_weight
+        a_node = weights(1, i_sh) / total_area
         ! Displacement constraints
         a(1:3, 1:3, i) = -disp_lin(1:3, 3*i_sh-2:3*i_sh)
         ! Rotation constraints
-        a(4, 1:3, i) = -q_mat(1, 3*i_sh-2:3*i_sh) * w_ish
-        a(5, 1:3, i) = -q_mat(2, 3*i_sh-2:3*i_sh) * w_ish
-        a(6, 1:3, i) = -q_mat(3, 3*i_sh-2:3*i_sh) * w_ish
+        a(4:6, 1:3, i) = -q_mat(1:3, 3*i_sh-2:3*i_sh) * a_node
         ! Warping constraint
         a(7, 1:3, i) = -w_lin(3*i_sh-2:3*i_sh)
         ! Set the active DOF (displacement) in the shell elements
@@ -555,54 +573,50 @@ C ******************************************************************** C
 C ******************************************************************** C
 C     Compute the linearized warping vector
 C ******************************************************************** C
+      ! todo: decide what form we want and clean this function up
       ! Returns the linearized warping vector.
-      ! @ input c: Location of nodes in initial config. relative to 
-      !            centroid, size 3xN
+      ! @ input x_def: pos. of nodes in deformed configuration, 3xN
       ! @ input n_sh: Number of shell nodes (N)
-      ! @ input psi: Warping function for all the nodes, size N
-      ! @ input r0: Rotation from referece to initial config., 3x3
-      ! @ input r: Rotation from initial to deformed config., 3x3
-      ! @ input n_area: Tributary area for each node, size N
-      ! @ returns: Linearization of warping amplitude w.r.t x, size 3Nx1
+      ! @ input t0: Orientation of the normal to the cross-section in  
+      !             the reference configuration
+      ! @ input psi: Warping function for all the nodes
+      ! @ input r: Rotation from initial to deformed configuration
+      ! @ input g: Instantaneous rotation matrix, size 3x3N
+      ! @ input we: Area weight value for each node, size N
+      ! @ returns w_lin: Linearization of warping amplitude w.r.t x
       !
       ! Notes:
       !   - we containts the area weights for each node, then the shear
       !   weights for each node, only use the first set
-      pure function calc_lin_w(c, n_sh, psi, r0, r, n_area)
-     1              result(w_linear)
+      pure function calc_lin_w(x_def, n_sh, t0, psi, r, we) 
+     1              result(w_lin)
       ! Input and output
       integer, intent(in)   ::  n_sh
-      real(8), intent(in)   ::  c(3, n_sh), psi(n_sh), r0(3,3), r(3, 3)
-      real(8), intent(in)   ::  n_area(n_sh)
-      real(8)               ::  w_linear(3*n_sh)
+      real(8), intent(in)   ::  x_def(3, n_sh), t0(3), psi(n_sh),r(3, 3)
+      real(8), intent(in)   ::  we(n_sh)
+      real(8)               ::  w_lin(3*n_sh)
       ! Internal
-      integer               ::  ii
-      real(8)               ::  bimom, w_warp(3, 3), c2(3, n_sh), d_cl
-      real(8)               ::  t_bar(3), rtot_T(3, 3)
+      integer               ::  i, j, num_psi_non_zero
+      real(8)               ::  t(3), we_total
+      real(8)               ::  zero, one, two
+      parameter                 (zero = 0.d0, one = 1.d0, two = 2.d0)
       real(8)               ::  zero_tol
       parameter                 (zero_tol=1.d-6)
-      ! Rotate from the initial config to the reference config
-      c2 = matmul(transpose(r0), c)
       ! Assemble the linearized warping vector
-      w_linear = 0.d0
-      bimom = 0.d0
-      t_bar = matmul(r, r0(:, 3))
-      rtot_T = transpose(matmul(r, r0))
-      do ii = 1, n_sh
-        if (abs(psi(ii)) > zero_tol) then
-          ! todo: bimom can be calculated in the function with psi
-          bimom = bimom + abs(c2(1, ii) * psi(ii) * n_area(ii))
-          ! Warping only causes axial stress (in 33 direction)
-          w_warp = 0.d0
-          w_warp(3, 3) = psi(ii) * n_area(ii)
-          w_linear(3*ii-2:3*ii) = psi(ii) * n_area(ii) * t_bar
+      t = matmul(r, t0)
+      w_lin = zero
+      ! Compute second term
+      num_psi_non_zero = 0
+      we_total = zero
+      do i = 1, n_sh
+        if (abs(psi(i)) > zero_tol) then
+          we_total = we_total + we(i)
+          w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) + t / psi(i) * we(i)
         end if
       end do
-      ! Normalize by the total bimoment to satisfy equilibrium
-      ! B = (M_f,t + M_f,b) * (d_cl / 2)
-      d_cl = maxval(c2(2, :))
-      bimom = bimom * d_cl
-      w_linear = w_linear / bimom
+      ! Compute the average from all the sums for the two terms
+      w_lin = w_lin / we_total
+      
       end function
 C ******************************************************************** C
 C     Extract rotation vector from quaternion
@@ -952,7 +966,7 @@ C ******************************************************************** C
       integer             ::  ii   
       
       ! Function start
-      t_bar = r(:, 3)
+      t_bar = r0(:, 3)
       rr0 = matmul(r, r0)
       rr0_T = transpose(rr0)
       do ii = 1, n_sh
@@ -974,8 +988,7 @@ C ******************************************************************** C
         w_bar(3, 3) = w_all(1, ii) / a_total
         s_bar(:, 3) = matmul(w_bar, t_bar)
         ! Rotate the weights from the reference to the deformed config
-        ! w_rotated = r0.t * r.t * we * r * r0
-        s = matmul(rr0_T, matmul(s_bar, rr0))
+        s = matmul(rr0, matmul(s_bar, rr0_T))
         u_lin(:, 3*ii-2:3*ii) = transpose(s)
       end do
       end function
