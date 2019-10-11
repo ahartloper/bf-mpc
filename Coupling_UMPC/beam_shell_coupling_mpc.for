@@ -65,10 +65,11 @@ C
       real(8)               :: lam_q(quatdim+1)
       ! Linearized displacment
       integer               ::  k_inner, n_inner
+      real(8)               ::  tol_inner, uc_prev(3)
       real(8), allocatable  ::  disp_lin(:, :)
       real(8)               ::  temp33(3, 3)
-      ! Defines the number of inner iterations to do
-      parameter                 (n_inner=3)
+      ! Defines the max number of inner iterations to do and the tolerance
+      parameter                 (n_inner=10, tol_inner=1.d-8)
       ! Numerical parameters
       real(8)               :: one, two, zero
       parameter                (one=1.0d0, two=2.0d0, zero=0.d0)
@@ -126,7 +127,9 @@ C ******************************************************************** C
       end do
       ! Iterate until convergence using the displacement linearization 
       ! for the centroid
+      u_cent(1:3) = zero
       do k_inner = 1, n_inner
+        uc_prev = u_cent
         u_cent(1:3) = zero
         do i = 1, n_shell
           temp33 = disp_lin(1:3, 3*i-2:3*i)
@@ -153,6 +156,11 @@ C ******************************************************************** C
         
         ! Compute the linearized centroid displacement
         disp_lin=calc_disp_lin(n_shell,weights,total_area,r_ref,r_mat)
+        
+        ! Check for convergene of the inner iterations
+        if (norm2(u_cent - uc_prev) / norm2(uc_prev) < tol_inner) then
+          exit
+        end if
       end do  ! over k_inner
 
       ! Compute the linearized rotation matrix
@@ -169,7 +177,7 @@ C ******************************************************************** C
      1                   weights(1, :))
       
       ! Compute the linearized centroid displacement
-        disp_lin=calc_disp_lin(n_shell,weights,total_area,r_ref,r_mat)
+      disp_lin=calc_disp_lin(n_shell,weights,total_area,r_ref,r_mat)
      
       ! Assign the A submatrix for the beam node and set active DOF
       forall(i = 1:maxdof) a(i, i, 1) = one
@@ -919,6 +927,8 @@ C ******************************************************************** C
         else if (c == flange_tag) then
           tau = tf * delta_f * shear_flange(p(:, ii), d, d1, bf, tf, tw)
           tau_2 = tf * delta_f * comp_shear_flange(p(:, ii), d_cl, bf)
+          
+          tau = tau * 0.0
         else if (c == corner_tag) then
           ! Sample at one-half element distance towards the web
           p_corner(1) = -sign(1., p(1, ii)) * delta_f / 2.
@@ -926,8 +936,13 @@ C ******************************************************************** C
           p_corner = p(:, ii) + p_corner
           tau = tf*delta_f/2.* shear_flange(p_corner, d, d1, bf, tf, tw)
           tau_2 = tf * delta_f / 2.* comp_shear_flange(p_corner,d_cl,bf)
+          
+          tau = tau * 0.0
         else
-          tau = tf * delta_f * shear_flange(p(:, ii), d, d1, bf, tf, tw)
+          tau=tf*delta_f*shear_flange(p(:, ii),d,d1,bf,tf,tw)
+          
+          tau = tau * 0.5
+          
           tau = tau+tw*delta_w/2.*shear_web(p(:, ii), d, d1, bf, tf, tw)
           ! Complementary shear cancels from both sides at the joint
           tau_2 = 0.
