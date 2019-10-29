@@ -66,7 +66,7 @@ C
       ! Linearized displacment
       integer               ::  k_inner, n_inner
       real(8)               ::  tol_inner, uc_prev(3)
-      real(8), allocatable  ::  disp_lin(:, :)
+      real(8), allocatable  ::  disp_lin(:, :), bend_tang(:, :)
       real(8)               ::  temp33(3, 3)
       ! Defines the max number of inner iterations to do and the tolerance
       parameter                 (n_inner=10, tol_inner=1.d-8)
@@ -87,6 +87,7 @@ C
       allocate(w_lin(ndim * n_shell))
       allocate(weights(4, n_shell))
       allocate(disp_lin(ndim, ndim * n_shell))
+      allocate(bend_tang(ndim, n_shell))
 C ******************************************************************** C
 C Subroutine definition
 C ******************************************************************** C
@@ -158,7 +159,7 @@ C ******************************************************************** C
         disp_lin=calc_disp_lin(n_shell,weights,total_area,r_ref,r_mat)
         
         ! Check for convergene of the inner iterations
-        if (norm2(u_cent - uc_prev) / norm2(uc_prev) < tol_inner) then
+        if (norm2(u_cent-uc_prev)/(norm2(uc_prev)+1.d-9)<tol_inner) then
           exit
         end if
       end do  ! over k_inner
@@ -183,6 +184,9 @@ C ******************************************************************** C
       forall(i = 1:maxdof) a(i, i, 1) = one
       forall(i = 1:maxdof) jdof(i, 1) = i
       
+      bend_tang = tang_force_b(n_shell, x_shell_ref, r_ref, r_mat, 
+     1            30.0d0, 29.5d0, 28.d0, 14.5d0, 300.d0, 472.d0)
+      
       ! Assign the A submatrices for the shell nodes
       do i = 2, n
         ! i_sh corresponds to the shell nodes since i starts at 2
@@ -192,6 +196,10 @@ C ******************************************************************** C
         a(1:3, 1:3, i) = -disp_lin(1:3, 3*i_sh-2:3*i_sh)
         ! Rotation constraints
         a(4:6, 1:3, i) = -q_mat(1:3, 3*i_sh-2:3*i_sh) * a_node
+        
+        ! Address tangential due to bending moment
+        a(4, 1:3, i) = a(4, 1:3, i) + bend_tang(1:3, i_sh)
+        
         ! Warping constraint
         a(7, 1:3, i) = -w_lin(3*i_sh-2:3*i_sh)
         ! Set the active DOF (displacement) in the shell elements
@@ -941,7 +949,7 @@ C ******************************************************************** C
         else
           tau=tf*delta_f*shear_flange(p(:, ii),d,d1,bf,tf,tw)
           
-          tau = tau * 0.5
+          tau = tau * 0.
           
           tau = tau+tw*delta_w/2.*shear_web(p(:, ii), d, d1, bf, tf, tw)
           ! Complementary shear cancels from both sides at the joint
@@ -1007,5 +1015,87 @@ C ******************************************************************** C
         u_lin(:, 3*ii-2:3*ii) = transpose(s)
       end do
       end function
+C ******************************************************************** C
+C     Correct tangential stress under bending
+C ******************************************************************** C
+      ! Returns the matrix of tangential forces for bending axial stress
+      ! @ input 
+      ! @ returns: 
+      pure function tang_force_b(n_sh, p, r0, r, df, dw, tf, tw,b,hcl) 
+     1              result(f_tang_b)
+      ! Input and output
+      integer, intent(in) ::  n_sh
+      real(8), intent(in) ::  p(3, n_sh), r0(3, 3), r(3, 3), df, dw, tf, 
+     1                        tw, b, hcl
+      real(8)             ::  f_tang_b(3, n_sh)
+      ! Internal variables
+      integer             ::  i
+      real(8)             ::  moi,nu,x_vec(3),y_vec(3),sf,zero_tol,y
+      parameter               (sf = 1.0d0, zero_tol = 0.1)
+      
+      ! Assume Poisson ratio = 0.3
+      nu = 0.3
+      ! moi is the moment of intertia
+      moi = 0.d0
+      x_vec = matmul(r, r0(:, 1))
+      y_vec = matmul(r, r0(:, 2))
+      f_tang_b = 0.d0
+      do i = 1, n_sh
+        ! web
+        y = p(2, i)
+        if (abs(p(1, i)) < zero_tol) then
+          if (abs(abs(p(2, i)) - hcl / 2.) < zero_tol) then
+            ! joint nodes
+         f_tang_b(2, i)=web_f_r(y+dw/2.,dw,hcl)-web_f_r(y-dw/2.,dw,hcl)
+            f_tang_b(2, i) = f_tang_b(2, i) * nu * tw * dw / 2.d0
+            moi = moi + p(2, i) ** 2 * tw * dw / 2.
+          else
+            ! inner nodes
+            if (abs(p(2, i)) < 0.1) then
+            ! center node (now nothing different from other nodes)
+         f_tang_b(2, i)=web_f_r(y+dw/2.,dw,hcl)-web_f_r(y-dw/2.,dw,hcl)
+            f_tang_b(2, i) = f_tang_b(2, i) * nu * tw * dw / 2.d0
+            else
+         f_tang_b(2, i)=web_f_r(y+dw/2.,dw,hcl)-web_f_r(y-dw/2.,dw,hcl)
+            f_tang_b(2, i) = f_tang_b(2, i) * nu * tw * dw / 2.d0
+            end if
+            moi = moi + p(2, i) ** 2 * tw * dw
+          end if
+          ! sf = scale factor to account for flexibility
+          f_tang_b(:, i) = f_tang_b(2, i) * y_vec * sf
+        end if
+        ! flange
+        if (abs(abs(p(2, i)) - hcl / 2.) < zero_tol) then
+          if (abs(abs(p(1, i)) - b / 2.) < zero_tol) then
+            ! edge node
+            moi = moi + p(2, i) ** 2 * tf * df / 2.
+          else
+            ! inner node
+            moi = moi + p(2, i) ** 2 * tf * df
+          end if
+        end if
+      end do
+      
+      ! Normalize to unit moment
+      f_tang_b = f_tang_b / moi
+      end function      
+C ******************************************************************** C
+      ! Returns restraint force
+      ! @ input 
+      ! @ returns: 
+      pure function web_f_r(y, dw, hcl) result(fdiff)
+      ! Input and output
+      real(8), intent(in) ::  y, dw, hcl
+      real(8)             ::  fdiff
+      real(8)             ::  alpha, beta
+      ! Function
+      alpha = 0.10
+      beta = 2.0
+      if (abs(y) <= hcl / 2.d0) then
+        fdiff = -y / (alpha * abs(y) / (hcl / 2.d0) + 1.d0 + beta)
+      else
+        fdiff = 0.d0
+      end if
+      end function      
 C ******************************************************************** C
       end  ! END SUBROUTINE
