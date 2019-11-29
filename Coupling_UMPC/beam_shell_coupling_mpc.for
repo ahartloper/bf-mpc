@@ -66,8 +66,9 @@ C
       ! Linearized displacment
       integer               ::  k_inner, n_inner
       real(8)               ::  tol_inner, uc_prev(3)
-      real(8), allocatable  ::  disp_lin(:, :), bend_tang(:, :)
-      real(8)               ::  temp33(3, 3)
+      real(8), allocatable  ::  disp_lin(:, :), bend_tang(:, :),
+     1                          my_torque(:, :), rotw(:, :), tmod(:)
+      real(8)               ::  temp33(3, 3), tmod_total
       ! Defines the max number of inner iterations to do and the tolerance
       parameter                 (n_inner=10, tol_inner=1.d-8)
       ! Numerical parameters
@@ -88,6 +89,10 @@ C
       allocate(weights(4, n_shell))
       allocate(disp_lin(ndim, ndim * n_shell))
       allocate(bend_tang(ndim, n_shell))
+      allocate(my_torque(ndim, n_shell))
+      allocate(tmod(n_shell))
+      allocate(rotw(4, n_shell))
+      allocate(q_mat2(ndim, ndim * n_shell))
 C ******************************************************************** C
 C Subroutine definition
 C ******************************************************************** C
@@ -174,7 +179,7 @@ C ******************************************************************** C
       w_amp = warp_amp(x_shell,x_shell_def,u_cent,t_def,r_mat,psi_all)
      
       ! Compute the linearized warping 
-      w_lin =calc_lin_w(x_shell_def,n_shell,r_ref(:,3),psi_all,r_mat,
+      w_lin =calc_lin_w(x_shell_ref,n_shell,r_ref(:,3),psi_all,r_mat,
      1                   weights(1, :))
       
       ! Compute the linearized centroid displacement
@@ -185,17 +190,29 @@ C ******************************************************************** C
       forall(i = 1:maxdof) jdof(i, 1) = i
       
       bend_tang = tang_force_b(n_shell, x_shell_ref, r_ref, r_mat, 
-     1            30.0d0, 29.5d0, 28.d0, 14.5d0, 300.d0, 472.d0)
+     1            25.0d0, 25.0d0, 28.d0, 14.5d0, 300.d0, 472.d0)
+      my_torque = torquer(n_shell, x_shell_ref, r_mat, weights(1, :), 
+     1            472.d0)
       
+      tmod = get_tmod(1, n_shell)
+      tmod_total = 0.d0
+      do i = 1, n_shell
+        tmod_total = tmod_total + tmod(i)
+      end do
+      rotw = rot_weights(n_shell, x_shell_ref, weights(1, :), tmod)
+      q_mat2 = lin_rot(n_shell, r_ref, r_mat, rotw)
+     
       ! Assign the A submatrices for the shell nodes
       do i = 2, n
         ! i_sh corresponds to the shell nodes since i starts at 2
         i_sh = i - 1
-        a_node = weights(1, i_sh) / total_area
+        a_node = weights(1, i_sh) * tmod(i) / total_area / tmod_total
         ! Displacement constraints
         a(1:3, 1:3, i) = -disp_lin(1:3, 3*i_sh-2:3*i_sh)
         ! Rotation constraints
-        a(4:6, 1:3, i) = -q_mat(1:3, 3*i_sh-2:3*i_sh) * a_node
+        q_mat(1:3, 3*i_sh-2:3*i_sh)=q_mat(1:3, 3*i_sh-2:3*i_sh)*a_node
+        a(4:6, 1:3, i) = -q_mat(1:3, 3*i_sh-2:3*i_sh)
+        !a(4:6, 1:3, i) = -q_mat2(1:3, 3*i_sh-2:3*i_sh)
         
         ! Address tangential due to bending moment
         a(4, 1:3, i) = a(4, 1:3, i) + bend_tang(1:3, i_sh)
@@ -604,11 +621,11 @@ C ******************************************************************** C
       ! Notes:
       !   - we containts the area weights for each node, then the shear
       !   weights for each node, only use the first set
-      pure function calc_lin_w(x_def, n_sh, t0, psi, r, we) 
+      pure function calc_lin_w(c2, n_sh, t0, psi, r, we) 
      1              result(w_lin)
       ! Input and output
       integer, intent(in)   ::  n_sh
-      real(8), intent(in)   ::  x_def(3, n_sh), t0(3), psi(n_sh),r(3, 3)
+      real(8), intent(in)   ::  c2(3, n_sh), t0(3), psi(n_sh),r(3, 3)
       real(8), intent(in)   ::  we(n_sh)
       real(8)               ::  w_lin(3*n_sh)
       ! Internal
@@ -616,22 +633,24 @@ C ******************************************************************** C
       real(8)               ::  t(3), we_total
       real(8)               ::  zero, one, two
       parameter                 (zero = 0.d0, one = 1.d0, two = 2.d0)
-      real(8)               ::  zero_tol
+      real(8)               ::  zero_tol, d_cl
       parameter                 (zero_tol=1.d-6)
       ! Assemble the linearized warping vector
       t = matmul(r, t0)
-      w_lin = zero
-      ! Compute second term
-      num_psi_non_zero = 0
-      we_total = zero
+      w_lin = 0.d0
+      we_total = 0.d0
       do i = 1, n_sh
         if (abs(psi(i)) > zero_tol) then
-          we_total = we_total + we(i)
-          w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) + t / psi(i) * we(i)
+          ! todo: bimom can be calculated in the function with psi
+          we_total = we_total + abs(c2(1, i) * psi(i) * we(i))
+          w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) + t * psi(i) * we(i)
         end if
       end do
-      ! Compute the average from all the sums for the two terms
-      w_lin = w_lin / we_total
+      ! Normalize by the total bimoment to satisfy equilibrium
+      ! B = (M_f,t + M_f,b) * (d_cl / 2)
+      d_cl = maxval(c2(2, :))
+      we_total = we_total * d_cl
+      w_lin = w_lin / we_total      
       
       end function
 C ******************************************************************** C
@@ -857,7 +876,11 @@ C ******************************************************************** C
         ! Direction assumes a positive shear force
         sgn = sign(1.d0, x1 * y1)
         ! Linear interpolation based on position along half flange
-        v = sgn * (bf - 2. * abs(x1)) * d_cl / 4.
+        if (abs(xi(1)) > bf / 2.) then
+          v = 0.
+        else
+          v = sgn * (bf - 2. * abs(x1)) * d_cl / 4.
+        end if
       end function
 C ******************************************************************** C
 C     Calculate the shear factor for web nodes (weak and strong)
@@ -882,7 +905,11 @@ C ******************************************************************** C
         x1 = xi(1)
         y1 = xi(2)
         ! Strong axis
-        v(1) = (2.*bf*(d+d1)*tf + tw*(d1**2-4.*y1**2)) / (8.*tw)
+        if (abs(xi(2)) > (d - tf) / 2.) then
+          v(1) = 0.
+        else 
+          v(1) = (2.*bf*(d+d1)*tf + tw*(d1**2-4.*y1**2)) / (8.*tw)
+        end if
         ! Weak axis
         ! Only valid for x1 = 0
         v(2) = (2.*bf**2*tf + (d-2.*tf)*tw**2) / (8.*d1)
@@ -936,7 +963,7 @@ C ******************************************************************** C
           tau = tf * delta_f * shear_flange(p(:, ii), d, d1, bf, tf, tw)
           tau_2 = tf * delta_f * comp_shear_flange(p(:, ii), d_cl, bf)
           
-          tau = tau * 0.0
+          tau(1) = 0.d0
         else if (c == corner_tag) then
           ! Sample at one-half element distance towards the web
           p_corner(1) = -sign(1., p(1, ii)) * delta_f / 2.
@@ -945,11 +972,11 @@ C ******************************************************************** C
           tau = tf*delta_f/2.* shear_flange(p_corner, d, d1, bf, tf, tw)
           tau_2 = tf * delta_f / 2.* comp_shear_flange(p_corner,d_cl,bf)
           
-          tau = tau * 0.0
+          tau(1) = 0.d0
         else
           tau=tf*delta_f*shear_flange(p(:, ii),d,d1,bf,tf,tw)
           
-          tau = tau * 0.
+          tau(1) = 0.d0
           
           tau = tau+tw*delta_w/2.*shear_web(p(:, ii), d, d1, bf, tf, tw)
           ! Complementary shear cancels from both sides at the joint
@@ -1096,6 +1123,99 @@ C ******************************************************************** C
       else
         fdiff = 0.d0
       end if
-      end function      
+      end function
+C ******************************************************************** C
+      ! Returns torque on flange only
+      ! @ input 
+      ! @ returns: 
+      function torquer(n_sh, p_ref, rr, we, hcl) result(tq)
+      ! Input and output
+      integer, intent(in) ::  n_sh
+      real(8), intent(in) ::  p_ref(3, n_sh), rr(3, 3), we(n_sh), hcl
+      real(8)             ::  tq(3, n_sh)
+      real(8)             ::  tor, ff
+      integer             ::  ii
+      ! Function
+      
+      ! todo: needs the initial config, r0, then apply r . r0 . tq
+      
+      tor = 0.
+      tq = 0.d0
+      do ii = 1, n_sh
+        if (abs(p_ref(2, ii)) >= hcl / 2.d0) then
+          ! todo: fix this hack (the 150 and 0.5 factor) - concentrates force at the center nodes
+          ff = 1.d0 - 0.9 * abs(p_ref(1, ii)) / 150.
+          tq(1:2, ii) = ff * we(ii) * [ -p_ref(2, ii), p_ref(1, ii) ]
+          tq(1:3, ii) = matmul(rr, tq(1:3, ii))
+          tor = tor + ff * we(ii) * norm2(p_ref(1:2, ii)) ** 2
+        end if
+      end do
+      tq = -1.d0 * tq / tor
+      end function
+C ******************************************************************** C
+      pure function rot_weights(n_sh, xyz, area, tmod) result(rw)
+        ! Returns the weights for applied moments.
+        ! @input n_sh: Number of shell nodes on the interface
+        ! @input xyz: Coords of shell nodes in reference config
+        ! @input area: Tributary area of each shell node
+        ! @input tmod: Tangent modulus associated with each node
+        ! @returns: Mx,My,Mz weights
+        integer, intent(in) ::  n_sh
+        real(8), intent(in) ::  xyz(3, n_sh), area(n_sh), tmod(n_sh)
+        integer             ::  ii
+        real(8)             ::  rw(4, n_sh)
+        real(8)             ::  mx(n_sh), my(n_sh), mz(2, n_sh), mxtot,
+     1                          mytot, mztot
+        do ii = 1, n_sh
+          mx(ii) = xyz(2, ii) * area(ii) * tmod(ii)
+          mxtot = mxtot + mx(ii) * xyz(2, ii)
+          my(ii) = -xyz(1, ii) * area(ii) * tmod(ii)
+          mytot = mytot + my(ii) * xyz(1, ii)
+          mz(:, ii) = [-xyz(2, ii), xyz(1, ii)] * area(ii) * tmod(ii)
+          mztot = mztot + area(ii) * tmod(ii) * norm2(xyz(1:2, ii))**2
+        end do
+        rw(1, :) = mx / mxtot
+        rw(2, :) = my / mytot
+        rw(3:4, :) = mz / mztot
+      end
+        
+C ******************************************************************** C
+      pure function lin_rot(n_sh, r0, r, rw) result(linr)
+        ! Returns the linearization of the rotation constraints.
+        ! @input n_sh: Number of shell nodes on the interface
+        ! @input r0: Rotation matrix from reference to initial configs
+        ! @input r: Rotation matrix from initial to current configs
+        ! @input rw: Weights for the moments
+        ! @returns: Matrix for the linearization of the rotations
+        integer, intent(in) ::  n_sh
+        real(8), intent(in) ::  r(3, 3), r0(3, 3), rw(4, n_sh)
+        real(8)             ::  linr(3, 3*n_sh)
+        integer             ::  ii
+        real(8)             ::  w_bar(3, 3), s_bar(3, 3), s(3, 3),
+     1                          t_bar(3), rr0(3, 3), rr0_T(3, 3)
+        t_bar = r0(:, 3)
+        rr0 = matmul(r, r0)
+        rr0_T = transpose(rr0)
+        do ii = 1, n_sh
+          ! Moment about x
+          w_bar = 0.d0
+          w_bar(3, 3) = rw(1, ii)
+          s_bar(:, 1) = matmul(w_bar, t_bar)
+          ! Moment about y
+          w_bar = 0.d0
+          w_bar(3, 3) = rw(2, ii)
+          s_bar(:, 2) = matmul(w_bar, t_bar)
+          ! Moment about z (torque)
+          w_bar = 0.d0
+          w_bar(1, 3) = rw(3, ii)
+          w_bar(3, 1) = rw(3, ii)
+          w_bar(2, 3) = rw(4, ii)
+          w_bar(3, 2) = rw(4, ii)
+          s_bar(:, 3) = matmul(w_bar, t_bar)
+          ! Rotate from reference to current config
+          s = matmul(rr0, matmul(s_bar, rr0_T))
+          linr(1:3, 3*ii-2:3*ii) = transpose(s)
+        end do        
+      end
 C ******************************************************************** C
       end  ! END SUBROUTINE
