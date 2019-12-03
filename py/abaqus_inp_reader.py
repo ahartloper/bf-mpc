@@ -1,3 +1,6 @@
+from interface_properties import InterfaceProperties
+
+
 class InpReader:
     """ Reads an Abaqus input file. """
 
@@ -12,6 +15,7 @@ class InpReader:
         self.element_sets = dict()
         self.sections = {'web': [], 'flange': []}
         self.active_section = ''
+        self.active_elset = ''
         return
 
     def read(self, input_file):
@@ -20,31 +24,38 @@ class InpReader:
         :param str input_file: Path to the input file.
         :return GlobalMpcModel: Model with all the interface information established.
         """
-        elem_str_id = '*Element'
-        mpc_str_id = '*MPC'
-        node_str_id = '*Node'
-        elset_str_id = '*Elset'
-        section_header = '** Section'
-        read_list = {'mpc': 1, 'element': 2, 'node': 3, 'elset': 4, 'section': 5, 'none': 99}
+        # todo: make the reader more elegant by check the keyword if there is a "*" then taking the first part of the
+        #  line before the comma as the input (so don't have to use *Element, type=S4R)
+        element_keyword_id = '*Element, type=S4R'
+        mpc_keyword_id = '*MPC'
+        elset_keyword_id = '*Elset'
+        generate_id = 'generate'
+        section_header_id = '** Section'
+        section_keyword_id = '*Shell Section'
+        read_list = {'mpc': 1, 'element': 2, 'elset': 3, 'section': 4, 'none': 99}
 
         interfaces = []
         with open(input_file, 'r') as f:
             for line in f:
                 l = line.strip()
                 # Check active block
-                if self._check_line(l, elem_str_id):
+                if self._check_line(l, element_keyword_id):
                     active_read = read_list['element']
-                elif self._check_line(l, mpc_str_id):
+                elif self._check_line(l, mpc_keyword_id):
                     active_read = read_list['mpc']
-                    self.active_interf = InterfaceProperties()
-                    interfaces.append(self.active_interf)
-                elif self._check_line(l, elset_str_id):
-                    active_read = read_list['elset']
-                    self.active_elset = self._extract_elset_name(l)
-                    self.element_sets[self.active_elset] = []
-                elif self._check_line(l, section_header):
+                    self.active_interf = self.global_model.add_mpc(InterfaceProperties())
+                    self.first_mpc_line = True
+                elif self._check_line(l, elset_keyword_id):
+                    l2 = l.split(',')
+                    if l2[-1].strip() == generate_id:
+                        active_read = read_list['elset']
+                        self.active_elset = self._extract_elset_name(l)
+                elif self._check_line(l, section_header_id):
                     active_read = read_list['section']
-                    self.active_section = l.split(':')[-1].split('_')[0].strip()
+                    self.active_section = self._extract_section_name(l)
+                elif self._check_line(l, section_keyword_id):
+                    self._read_section(l)
+                    active_read = read_list['none']
                 elif l[0] == '*' or l[0] == '':
                     active_read = read_list['none']
 
@@ -55,35 +66,43 @@ class InpReader:
                     self._read_mpc(l)
                 elif active_read == read_list['elset']:
                     self._read_elset(l)
-                elif active_read == read_list['section']:
-                    self._read_section(l)
+                # elif active_read == read_list['section']:
 
-        # Initialize the node to element maps
-        [interf.calc_interf_elem_map() for interf in interfaces]
+        # Finalize the global model
+        self.global_model.element_sets = self.element_sets
+        self.global_model.sections = self.sections
+        self.global_model.process_model()
         return self.global_model
 
     def _check_line(self, line, check):
-        """ Checks if the start of the line is equal to check. """
+        """ Returns the test if the start of the line is equal to check. """
         if line[:len(check)] == check:
             return True
         else:
             return False
 
     def _read_element(self, line):
+        """ Adds an element to the global model. """
         l = line.split(',')
-        elem = int(l[0])
-        connectivity = [int(li) for li in l[1:]]
-        self.all_interfaces.add_element(elem, connectivity)
+        elem = int(l[0].strip())
+        connectivity = [int(li.strip()) for li in l[1:]]
+        self.global_model.add_element(elem, connectivity)
         return
 
     def _read_mpc(self, line):
+        """ Adds the properties of an interface to the global model. """
         l = line.split(',')
         if self.first_mpc_line:
+            # If first line we have the global ID
             self.first_mpc_line = False
-            self.active_interf.global_id = int(l[1])
-            [self.active_interf.add_interface_node[int(li)] for li in l[2:]]
+            self.active_interf.global_id = int(l[1].strip())
         else:
-            [self.active_interf.add_interface_node[int(li)] for li in l[1:]]
+            # If later lines we just have a shell node
+            self.active_interf.add_interface_node(int(l[1].strip()))
+        for n in l[2:]:
+            n2 = n.strip()
+            if not n2 == '':
+                self.active_interf.add_interface_node(int(n2))
         return
 
     def _extract_elset_name(self, line):
@@ -91,13 +110,21 @@ class InpReader:
         l = line.split(',')
         return l[1].split('=')[-1]
 
+    def _extract_section_name(self, line):
+        """ Returns the name of the section.
+
+        Assumes that the header is as follows:
+        ** Section: <flange/web>_<arbitrary text without underscores>
+        """
+        return line.split(':')[-1].split('_')[0].strip()
+
     def _read_elset(self, line):
         """ Reads the data lines of an elset.
 
-        Assumes that the type is "generate".
+        Assumes that the type is "generate" and the interval is 1.
         """
         l = line.split(',')
-        self.element_sets[self.active_elset] = [l[0], l[1]]
+        self.element_sets[self.active_elset] = [int(l[0]), int(l[1])]
         return
 
     def _read_section(self, line):
