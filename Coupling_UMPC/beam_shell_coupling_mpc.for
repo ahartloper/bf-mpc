@@ -55,7 +55,7 @@ C
      1                         q_mat(:, :), x_shell_def(:, :),
      2                         x_shell(:, :), u_shell(:, :), 
      3                         w_lin(:), psi_all(:), weights(:, :),
-     4                         x_shell_ref(:, :)
+     4                         x_shell_ref(:, :), q_mat2(:, :)
       ! For the rotation quaternion and computations
       real(8)               ::  b_mat(quatdim, quatdim), 
      1                          beta(quatdim, quatdim), 
@@ -74,6 +74,7 @@ C
       ! Numerical parameters
       real(8)               :: one, two, zero
       parameter                (one=1.0d0, two=2.0d0, zero=0.d0)
+      integer               ::  interf_id, inelastic_interface
       ! Allocate variable size arrays
       n_shell = n - 1
       allocate(x_shell(ndim, n_shell))
@@ -96,6 +97,11 @@ C
 C ******************************************************************** C
 C Subroutine definition
 C ******************************************************************** C
+      ! Parameter to select if using inelastic interface
+      ! if inelastic_interface == 1, use computed tangent modulus
+      ! if inelastic_interface /= 1, use constant tangent modulus
+      inelastic_interface = 1
+      
       ! Calculate the centroid locations
       ! The first node is the beam node, the shell nodes follow
       x_shell = x(1:3, 2:n)
@@ -114,10 +120,24 @@ C ******************************************************************** C
       end do
       r_ref = ini_config(c_mat, n_shell)
       
+      ! Get the tangent modulus for each node
+      ! todo: need to find someway of getting the beam ID in here
+      if (x(3,1) < 2000) then
+        interf_id = 2245
+      else
+        interf_id = 2247
+      end if
+      if (inelastic_interface == 1) then
+        tmod = form_tmod_vec(n_shell, interf_id)
+      else
+        tmod = 1.d0
+      end if
+      
       ! Calculate the nodal weights for displacement linearization
       ! todo: pass x_shell_ref where needed
       x_shell_ref = matmul(transpose(r_ref), c_mat)
-      weights = calc_weights(x_shell_ref, n_shell, jtype)
+      ! todo: need to get all the tf, tw, h, bf, in the main
+      weights = calc_weights(x_shell_ref, n_shell, jtype, tmod)
       total_area = zero
       do i = 1, n_shell
         total_area = total_area + weights(1, i)
@@ -194,11 +214,6 @@ C ******************************************************************** C
       my_torque = torquer(n_shell, x_shell_ref, r_mat, weights(1, :), 
      1            472.d0)
       
-      tmod = get_tmod(1, n_shell)
-      tmod_total = 0.d0
-      do i = 1, n_shell
-        tmod_total = tmod_total + tmod(i)
-      end do
       rotw = rot_weights(n_shell, x_shell_ref, weights(1, :), tmod)
       q_mat2 = lin_rot(n_shell, r_ref, r_mat, rotw)
      
@@ -206,16 +221,18 @@ C ******************************************************************** C
       do i = 2, n
         ! i_sh corresponds to the shell nodes since i starts at 2
         i_sh = i - 1
-        a_node = weights(1, i_sh) * tmod(i) / total_area / tmod_total
+        a_node = weights(1, i_sh) / total_area
         ! Displacement constraints
         a(1:3, 1:3, i) = -disp_lin(1:3, 3*i_sh-2:3*i_sh)
         ! Rotation constraints
         q_mat(1:3, 3*i_sh-2:3*i_sh)=q_mat(1:3, 3*i_sh-2:3*i_sh)*a_node
-        a(4:6, 1:3, i) = -q_mat(1:3, 3*i_sh-2:3*i_sh)
-        !a(4:6, 1:3, i) = -q_mat2(1:3, 3*i_sh-2:3*i_sh)
+        !a(4:6, 1:3, i) = -q_mat(1:3, 3*i_sh-2:3*i_sh)
+        a(4:6, 1:3, i) = -q_mat2(1:3, 3*i_sh-2:3*i_sh)
         
         ! Address tangential due to bending moment
-        a(4, 1:3, i) = a(4, 1:3, i) + bend_tang(1:3, i_sh)
+        !a(4, 1:3, i) = a(4, 1:3, i) + bend_tang(1:3, i_sh)
+        ! Replace the torque
+        !a(6, 1:3, i) = my_torque(1:3, i_sh)
         
         ! Warping constraint
         a(7, 1:3, i) = -w_lin(3*i_sh-2:3*i_sh)
@@ -685,6 +702,7 @@ C ******************************************************************** C
       ! @ input p: Shell nodes in the reference configuration, size 3xN
       ! @ input n_sh: Number of shell nodes (N)
       ! @ input tf_tw_code: Encoded flange and web thickness factors
+      ! @ input etang: Tangent modulus, size N
       ! @ returns w: Weight value for each node
       !   - Row 1: Area weight
       !   - Row 2: Normalized strong axis weight
@@ -698,10 +716,10 @@ C ******************************************************************** C
       !   - The weights are only valid if the interface is elastic
       !   - The flange and web mesh distances are assumed to be constant
       !     between nodes
-      pure function calc_weights(p, n_sh, tf_tw_code) result(ww)
+      function calc_weights(p, n_sh, tf_tw_code, etang) result(ww)
       ! Input and output
       integer, intent(in)   ::  n_sh
-      real(8), intent(in)   ::  p(3, n_sh)
+      real(8), intent(in)   ::  p(3, n_sh), etang(n_sh)
       integer, intent(in)   ::  tf_tw_code
       real(8)               ::  ww(4, n_sh)
       ! Internal variables
@@ -805,7 +823,7 @@ C ******************************************************************** C
       width = 2.d0 * x_max
       depth = 2.d0 * y_max + tf
       v_weights = shear_factors(p, n_sh, depth, width, tf, tw, 
-     1                          delta_f, delta_w, classification)
+     1                          delta_f, delta_w, classification, etang)
       ! Assign the area weights
       do ii = 1, n_sh
         c = classification(ii)
@@ -925,16 +943,18 @@ C ******************************************************************** C
       ! @ input tf: Flange thickness
       ! @ input tw: Web thickness
       ! @ input c_tags: Node classification tag, size N
+      ! @ input etang: Tangent modulus, size N
       ! @ returns: The normalized shear resultants, size Nx3
       !   - Column 1: strong axis
       !   - Column 2: weak axis
       !   - Column 3: complementary force for strong axis
       pure function shear_factors(p, n_sh, d, bf, tf, tw, 
-     1                            delta_f, delta_w, c_tags) result(v)
+     1                            delta_f, delta_w, c_tags, etang)
+     2                            result(v)
       ! Input and output
       integer, intent(in) ::  n_sh, c_tags(n_sh)
       real(8), intent(in) ::  p(3, n_sh), d, bf, tf, tw, 
-     1                        delta_f, delta_w
+     1                        delta_f, delta_w, etang(n_sh)
       real(8)             ::  v(n_sh, 3)
       ! Internal variables
       real(8)             ::  d1, tau(2), total_strong, total_weak,
@@ -982,6 +1002,9 @@ C ******************************************************************** C
           ! Complementary shear cancels from both sides at the joint
           tau_2 = 0.
         end if
+        ! Adjust for the tangent modulus
+        tau = tau * etang(ii)
+        ! Record the weights
         total_strong = total_strong + tau(1)
         total_weak = total_weak + tau(2)
         v(ii, 1:2) = tau
@@ -1171,11 +1194,11 @@ C ******************************************************************** C
           mxtot = mxtot + mx(ii) * xyz(2, ii)
           my(ii) = -xyz(1, ii) * area(ii) * tmod(ii)
           mytot = mytot + my(ii) * xyz(1, ii)
-          mz(:, ii) = [-xyz(2, ii), xyz(1, ii)] * area(ii) * tmod(ii)
+          mz(1:2, ii) = [-xyz(2, ii), xyz(1, ii)] * area(ii) * tmod(ii)
           mztot = mztot + area(ii) * tmod(ii) * norm2(xyz(1:2, ii))**2
         end do
         rw(1, :) = mx / mxtot
-        rw(2, :) = my / mytot
+        rw(2, :) = my / abs(mytot)
         rw(3:4, :) = mz / mztot
       end
         
@@ -1217,5 +1240,42 @@ C ******************************************************************** C
           linr(1:3, 3*ii-2:3*ii) = transpose(s)
         end do        
       end
+C ******************************************************************** C
+C BELONGS IN MPC
+C ******************************************************************** C
+      function form_tmod_vec(n_sh, beam_id) result(tmod)
+        ! Returns the tangent modulus for each node.
+        ! @input n_sh: Number of shell elements on interface.
+        ! @input beam_id: Beam node tag for the interface.
+        ! @returns: The tangent modulus averaged for each node.
+        integer, intent(in)   ::  n_sh, beam_id
+        integer               ::  asize
+        parameter(asize=1000)
+        integer               ::  TMOD_ARR_ID, ID_ADJ
+        parameter(TMOD_ARR_ID=1, ID_ADJ=3)
+        real(8)               ::  tmod_arr(asize)
+        real(8)               ::  tmod(n_sh), nelem
+        integer               ::  info_arr(3*n_sh), interf_id, ii,
+     1                            elem_indexs(3)
+        pointer(p_tmod, tmod_arr)
+        pointer(p_info, info_arr)
+#include <SMAAspUserSubroutines.hdr>
+        ! Function start
+        interf_id = beam_id + ID_ADJ
+        p_tmod = SMAFloatArrayAccess(TMOD_ARR_ID)
+        p_info = SMAIntArrayAccess(interf_id)
+        tmod = 0.d0
+        do ii = 1, n_sh
+          elem_indexs(1:3) = info_arr(3*ii-2:3*ii)
+          nelem = 0.
+          do j = 1, 3
+            if (elem_indexs(j) /= 0) then
+              tmod(ii) = tmod(ii) + tmod_arr(elem_indexs(j))
+              nelem = nelem + 1.
+            end if
+          end do
+          tmod(ii) = tmod(ii) / nelem
+        end do
+      end function
 C ******************************************************************** C
       end  ! END SUBROUTINE
