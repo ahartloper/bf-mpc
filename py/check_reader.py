@@ -1,8 +1,8 @@
 from __future__ import absolute_import
 import os
-from abaqus_inp_reader import InpReader
-from global_mpc_model import GlobalMpcModel
-from abaqus_analysis_writer import AbaAnalysisWriter
+from src.abaqus_inp_reader import InpReader
+from src.global_mpc_model import GlobalMpcModel
+from src.abaqus_analysis_writer import AbaAnalysisWriter
 
 input_file = './testing/test_model.inp'
 

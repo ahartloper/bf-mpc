@@ -1,5 +1,5 @@
 from __future__ import absolute_import
-from global_props import *
+from .global_props import *
 
 
 class GlobalMpcModel:
@@ -79,5 +79,15 @@ class GlobalMpcModel:
         """ Process the model to prepare for output. """
         self.establish_all_interface_nodes()
         self.establish_interface_elements()
+        self._clean_elsets()
         self.establish_directions()
         self.set_interface_node_to_element_index_maps()
+
+    def _clean_elsets(self):
+        """ Removes the element sets that are not associated with flange/web sections. """
+        temp = dict()
+        for elset in self.element_sets:
+            if elset in self.sections['web'] or elset in self.sections['flange']:
+                temp[elset] = self.element_sets[elset]
+        self.element_sets = temp
+        return

@@ -7,8 +7,9 @@ class AbaAnalysisWriter:
         :param GlobalMpcModel global_model: Model that will be output to file.
         """
         self.model = global_model
-        self.ELEMENTS_HEADER = '*elements'
-        self.INTERFACES_HEADER = '*interface'
+        self.ELEMENTS_KEYWORD = '*elem'
+        self.INTERFACES_KEYWORD = '*intr'
+        self.END_FILE_KEYWORD = '*endf'
         pass
 
     def write(self, output_file):
@@ -19,13 +20,13 @@ class AbaAnalysisWriter:
             - The indices for the elements are output in 1-indexed format (node-to-element maps)
         """
         with open(output_file, 'w') as f:
-            l = ','.join([self.ELEMENTS_HEADER, str(len(self.model.interface_elements))]) + '\n'
+            l = ','.join([self.ELEMENTS_KEYWORD, str(len(self.model.interface_elements))]) + '\n'
             f.write(l)
             for i, elem in enumerate(self.model.interface_elements):
                 l = ','.join([str(elem), str(self.model.elem_directions[i])]) + '\n'
                 f.write(l)
             for interf in self.model.interfaces:
-                l = ','.join([self.INTERFACES_HEADER, str(len(interf.interface_nodes))]) + '\n'
+                l = ','.join([self.INTERFACES_KEYWORD, str(len(interf.interface_nodes))]) + '\n'
                 f.write(l)
                 f.write(str(interf.global_id) + '\n')
                 for n in interf.interface_nodes:
@@ -38,4 +39,5 @@ class AbaAnalysisWriter:
                     else:
                         l = '{0:d},{1:d},{2:d}\n'.format(n2e_map[0], n2e_map[1], n2e_map[2])
                     f.write(l)
+            f.write(self.END_FILE_KEYWORD + '\n')
         return

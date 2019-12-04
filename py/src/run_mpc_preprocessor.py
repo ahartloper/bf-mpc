@@ -1,9 +1,9 @@
 from __future__ import absolute_import, print_function
 import os
 import sys
-from abaqus_inp_reader import InpReader
-from global_mpc_model import GlobalMpcModel
-from abaqus_analysis_writer import AbaAnalysisWriter
+from .abaqus_inp_reader import InpReader
+from .global_mpc_model import GlobalMpcModel
+from .abaqus_analysis_writer import AbaAnalysisWriter
 
 
 def run_mpc_preprocessor(input_file):
@@ -14,7 +14,8 @@ def run_mpc_preprocessor(input_file):
         - Section definitions need to be preceded by the comment: ** Section: <flange/web>_<section name>
     """
     path_split = os.path.split(input_file)
-    output_file = os.path.join(path_split[0], path_split[1][:-4] + '_interf_props.txt')
+    # output_file = os.path.join(path_split[0], path_split[1][:-4] + '_interf_props.txt')
+    output_file = os.path.join(path_split[0], 'interface_props.txt')
 
     model = GlobalMpcModel()
     reader = InpReader(model)

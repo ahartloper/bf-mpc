@@ -1,4 +1,4 @@
-from interface_properties import InterfaceProperties
+from .interface_properties import InterfaceProperties
 
 
 class InpReader:
@@ -30,9 +30,9 @@ class InpReader:
                 with a step size of 1 e.g.,
                     *Elset, elset=<set_name>, generate
                     <start_elem>, <end_elem>, 1
+            - Only shell sections are considered, i.e.,
+                    *Shell Section
         """
-        # todo: make the reader more elegant by check the keyword if there is a "*" then taking the first part of the
-        #  line before the comma as the input (so don't have to use *Element, type=S4R)
         element_keyword_id = '*Element,'
         mpc_keyword_id = '*MPC'
         elset_keyword_id = '*Elset'
@@ -42,7 +42,6 @@ class InpReader:
         read_list = {'mpc': 1, 'element': 2, 'elset': 3, 'section': 4, 'none': 99}
         accepted_element_types = ['S4R']
 
-        interfaces = []
         with open(input_file, 'r') as f:
             for line in f:
                 l = line.strip()
@@ -76,7 +75,6 @@ class InpReader:
                     self._read_mpc(l)
                 elif active_read == read_list['elset']:
                     self._read_elset(l)
-                # elif active_read == read_list['section']:
 
         # Finalize the global model
         self.global_model.element_sets = self.element_sets
