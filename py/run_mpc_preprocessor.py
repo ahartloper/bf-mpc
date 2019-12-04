@@ -7,7 +7,12 @@ from abaqus_analysis_writer import AbaAnalysisWriter
 
 
 def run_mpc_preprocessor(input_file):
-    """ Runs the pre-processor for Abaqus input files that contain inelastic best-fit MPCs. """
+    """ Runs the pre-processor for Abaqus input files that contain inelastic best-fit MPCs.
+    : param str input_file: Path to the input (.inp) file to be processed.
+
+    Notes:
+        - Section definitions need to be preceded by the comment: ** Section: <flange/web>_<section name>
+    """
     path_split = os.path.split(input_file)
     output_file = os.path.join(path_split[0], path_split[1][:-4] + '_interf_props.txt')
 

@@ -2,3 +2,4 @@
 *.u2d
 *.vfproj
 Coupling_UMPC/.goutputstream-*
+py/testing/test_model_interf_props.txt

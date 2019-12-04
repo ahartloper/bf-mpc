@@ -19,20 +19,28 @@ class InpReader:
         return
 
     def read(self, input_file):
-        """ Reads the contents of the input file into the global model and returns that model.
+        """ Reads the contents of the input file into the global model and runs the model processing.
 
         :param str input_file: Path to the input file.
-        :return GlobalMpcModel: Model with all the interface information established.
+
+        Notes:
+            - Elements are defined following: *Element, type=<elem_type>
+            - Each section definition is preceded by: ** Section: <flange/web>_<arbitrary text without underscores>
+            - All the element sets that contain either flange/web elements are defined using the "generate" option
+                with a step size of 1 e.g.,
+                    *Elset, elset=<set_name>, generate
+                    <start_elem>, <end_elem>, 1
         """
         # todo: make the reader more elegant by check the keyword if there is a "*" then taking the first part of the
         #  line before the comma as the input (so don't have to use *Element, type=S4R)
-        element_keyword_id = '*Element, type=S4R'
+        element_keyword_id = '*Element,'
         mpc_keyword_id = '*MPC'
         elset_keyword_id = '*Elset'
         generate_id = 'generate'
         section_header_id = '** Section'
         section_keyword_id = '*Shell Section'
         read_list = {'mpc': 1, 'element': 2, 'elset': 3, 'section': 4, 'none': 99}
+        accepted_element_types = ['S4R']
 
         interfaces = []
         with open(input_file, 'r') as f:
@@ -40,7 +48,9 @@ class InpReader:
                 l = line.strip()
                 # Check active block
                 if self._check_line(l, element_keyword_id):
-                    active_read = read_list['element']
+                    l2 = l.split(',')
+                    if l2[1].split('=')[-1] in accepted_element_types:
+                        active_read = read_list['element']
                 elif self._check_line(l, mpc_keyword_id):
                     active_read = read_list['mpc']
                     self.active_interf = self.global_model.add_mpc(InterfaceProperties())
@@ -72,10 +82,10 @@ class InpReader:
         self.global_model.element_sets = self.element_sets
         self.global_model.sections = self.sections
         self.global_model.process_model()
-        return self.global_model
+        return
 
     def _check_line(self, line, check):
-        """ Returns the test if the start of the line is equal to check. """
+        """ Returns the result of testing if the start of line is equal to check. """
         if line[:len(check)] == check:
             return True
         else:
@@ -113,22 +123,23 @@ class InpReader:
     def _extract_section_name(self, line):
         """ Returns the name of the section.
 
-        Assumes that the header is as follows:
-        ** Section: <flange/web>_<arbitrary text without underscores>
+        Notes:
+            - Assumes that the header is as follows: ** Section: <flange/web>_<arbitrary text without underscores>
         """
         return line.split(':')[-1].split('_')[0].strip()
 
     def _read_elset(self, line):
         """ Reads the data lines of an elset.
 
-        Assumes that the type is "generate" and the interval is 1.
+        Notes:
+            - Assumes that the type is "generate" and the interval is 1.
         """
         l = line.split(',')
         self.element_sets[self.active_elset] = [int(l[0]), int(l[1])]
         return
 
     def _read_section(self, line):
-        " Adds the section name to the flange or web group."""
+        """ Adds the section name to the flange or web group."""
         l = line.split(',')
         elset_name = l[1].split('=')[-1]
         self.sections[self.active_section].append(elset_name)
