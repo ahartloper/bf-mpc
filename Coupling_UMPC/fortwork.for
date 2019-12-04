@@ -111,62 +111,81 @@ C ******************************************************************** C
       end function
       end   ! SUBROUTINE UEXTERNALDB
 C ******************************************************************** C
+
+
 C ******************************************************************** C
-
-
-      pure function form_tmod_vec(n_sh, info_arr_id) result(tmod)
+C BELONGS IN MPC
+C ******************************************************************** C
+      function form_tmod_vec(n_sh, beam_id) result(tmod)
         ! Returns the tangent modulus for each node.
         ! @input n_sh: Number of shell elements on interface.
-        ! @input info_arr_id: ID of the global array assoc. with
-        !   coupling.
+        ! @input beam_id: Beam node tag for the interface.
         ! @returns: The tangent modulus averaged for each node.
-        integer, intent(in)   ::  info_arr_id
-        real(8)               ::  tmod_arr(:)
+        integer, intent(in)   ::  n_sh, beam_id
+        integer               ::  asize
+        parameter(asize=1000)
+        integer               ::  TMOD_ARR_ID, ID_ADJ
+        parameter(TMOD_ARR_ID=1, ID_ADJ=3)
+        real(8)               ::  tmod_arr(asize)
         real(8)               ::  tmod(n_sh), nelem
-        integer               ::  info_arr(3, n_sh), TMOD_ARR_ID, n_tm
-        parameter(TMOD_ARR_ID=1)
+        integer               ::  info_arr(3*n_sh), interf_id, ii,
+     1                            elem_indexs(3)
         pointer(p_tmod, tmod_arr)
         pointer(p_info, info_arr)
+#include <SMAAspUserSubroutines.hdr>
         ! Function start
-        ! n_tm = SMAIntArraySize(TMOD_ARR_ID)
-        ! allocate(tmod_arr(n_tm))
+        interf_id = beam_id + ID_ADJ
         p_tmod = SMAFloatArrayAccess(TMOD_ARR_ID)
-        p_info = SMAIntArrayAccess(info_arr_id)
-
+        p_info = SMAIntArrayAccess(interf_id)
         tmod = 0.d0
-        do i = 1, n_sh
-          elem_indexs = info_arr(:, i)
+        do ii = 1, n_sh
+          elem_indexs(1:3) = info_arr(3*ii-2:3*ii)
           nelem = 0.
           do j = 1, 3
-            if (elem_indexs(j) .not. 0) then
-              tmod(i) = tmod(i) + tmod_arr(elem_indexs(j))
+            if (elem_indexs(j) /= 0) then
+              tmod(ii) = tmod(ii) + tmod_arr(elem_indexs(j))
               nelem = nelem + 1.
             end if
           end do
-          tmod(i) = tmod(i) / nelem
+          tmod(ii) = tmod(ii) / nelem
         end do
-      end
+      end function
+C ******************************************************************** C
 
-      pure function set_tmod(arr_loc, dir, cep)
+C ******************************************************************** C
+C BELONGS IN UMAT
+C ******************************************************************** C
+      function set_tmod(noel) result(res)
         ! Sets the tangent modulus for the shell elem on the interface.
-        ! @input arr_loc: Index for the global tangent modulus array.
-        ! @input dir: Direction to use from the tangent moduli matrix.
         ! @input cep: Tangent moduli matrix (plane stress).
-        integer, intent(in) ::  info_arr_id
-        real(8), intent(in) ::  cep(3, 3)
-        real(8)             ::  tmod_arr(:)
-        integer             ::  dir_arr(:), TMOD_ARR_ID
+        ! @input noel: Element number of the integration point.
+        !real                ::  cep(:, :)
+        integer             ::  asize
+        parameter(asize=1000)
+        integer             ::  TMOD_ARR_ID, ID_ARR_ID, DIR_ARR_ID
+        parameter(TMOD_ARR_ID=1,ID_ARR_ID=2,DIR_ARR_ID=3)
+        real(8)             ::  tmod_arr(asize)
+        integer             ::  id_arr(asize),direc_arr(asize),arr_loc,
+     1                          narr, direc, res
         pointer(p_tmod, tmod_arr)
-        ! todo: put these in some import?
-        parameter(TMOD_ARR_ID=1)
+        pointer(p_id, id_arr)
+        pointer(p_direc, direc_arr)
+#include <SMAAspUserSubroutines.hdr>
         ! Function start
-        p_tmod = SMAFloatArrayAccess(TMOD_ARR_ID)
-        tmod_arr(arr_loc) = cep(dir, dir)
-      end
-
-
-        
-      pure function loc_interf_elem(noel, id_arr, narr) result(res)
+        narr = SMAIntArraySize(ID_ARR_ID)
+        p_id = SMAIntArrayAccess(ID_ARR_ID)
+        arr_loc = loc_interf_elem(noel, id_arr, narr)
+        if (arr_loc /= -1) then
+          p_direc = SMAIntArrayAccess(DIR_ARR_ID)
+          direc = direc_arr(arr_loc)
+          p_tmod = SMAFloatArrayAccess(TMOD_ARR_ID)
+        ! todo: this only works for one integration point, what about sections in the S4R elem?
+          tmod_arr(arr_loc) = ddsdde(direc, direc)
+        end if
+        res = 0
+      end function
+C ******************************************************************** C        
+      function loc_interf_elem(noel, id_arr, narr) result(res)
         ! Returns the index in id_arr that matches noel.
         ! @input noel: ID of element to find in id_arr.
         ! @input id_arr: Array to search.
@@ -182,5 +201,6 @@ C ******************************************************************** C
             exit
           end if
         end do
-      end
+      end function
+C ******************************************************************** C
 
