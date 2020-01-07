@@ -28,7 +28,10 @@ class AbaAnalysisWriter:
             for interf in self.model.interfaces:
                 l = ','.join([self.INTERFACES_KEYWORD, str(len(interf.interface_nodes))]) + '\n'
                 f.write(l)
-                f.write(str(interf.global_id) + '\n')
+                sp = self.model.section_props[interf.global_id]
+                section_props = [sp['d'], sp['bf'], sp['tf'], sp['tw']]
+                l = ','.join([str(interf.global_id)] + [str(secp) for secp in section_props])
+                f.write(l + '\n')
                 for n in interf.interface_nodes:
                     n2e_map = interf.node_to_elem_ind_map[n]
                     n2e_map = [ei + MODIFICATION_FOR_1_INDEX for ei in n2e_map]

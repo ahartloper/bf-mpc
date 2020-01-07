@@ -13,6 +13,7 @@ class GlobalMpcModel:
         self.interfaces = list()
         self.all_interface_nodes = list()
         self.sections = dict()
+        self.section_props = dict()
         return
 
     def add_element(self, elem_id, connectivity):

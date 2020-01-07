@@ -4,9 +4,10 @@ import sys
 from .abaqus_inp_reader import InpReader
 from .global_mpc_model import GlobalMpcModel
 from .abaqus_analysis_writer import AbaAnalysisWriter
+from .sections_reader import section_reader
 
 
-def run_mpc_preprocessor(input_file):
+def run_mpc_preprocessor(input_file, section_file):
     """ Runs the pre-processor for Abaqus input files that contain inelastic best-fit MPCs.
     : param str input_file: Path to the input (.inp) file to be processed.
 
@@ -20,6 +21,7 @@ def run_mpc_preprocessor(input_file):
     model = GlobalMpcModel()
     reader = InpReader(model)
     reader.read(input_file)
+    model.section_props = section_reader(section_file)
     writer = AbaAnalysisWriter(model)
     writer.write(output_file)
     return
