@@ -501,9 +501,13 @@ module mpc_modules
     real(8) ::  width, depth, v_weights(n_sh, 4)
     ! Tolerance in positions
     real(8) :: zero_tol
-    parameter(zero_tol=1.d-3)
-    
+    parameter(zero_tol=1.d-3)    
     ! Function start
+    depth = section_props(1)
+    width = section_props(2)
+    tf = section_props(3)
+    tw = section_props(4)
+    
     ! Classify the points
     classification(:) = 0
     x_max = maxval(p(1, :))
@@ -554,29 +558,6 @@ module mpc_modules
     delta_f = x_max - x_max_2
     delta_w = y_max - y_max_2
     
-    ! Decode the flange and web thickness factors
-    ! d_digits starts at 4 since there will be at least 5 digits
-    ! d_digits = 4;
-    ! do while (tf_tw_code / 10 ** d_digits > 10)
-    !    Divide by 10 until we get something less than 10, this is 
-    !    the first digit of tf_tw_code
-    !    ! d_digits = d_digits + 1
-    ! end do
-    ! deci = tf_tw_code / 10 ** d_digits
-    ! The number of digits in each thickness is assumed to be equal
-    ! n_digits = d_digits / 2
-    ! The thickness values are what is left after we subtract the 
-    ! decimal value from the front
-    ! tf_tw = tf_tw_code - deci * (10 ** d_digits)
-    ! Use the same subtracting off-the-front to get the tf and then tw
-    ! The int casting is to truncate the un-needed digits
-    ! tf = int(tf_tw / 10 ** n_digits)
-    ! tf = tf / 10. ** deci
-    ! tw = int(tf_tw - int(tf * 10. ** (deci + n_digits)))
-    ! tw = tw / 10. ** deci
-    tf = section_props(3)
-    tw = section_props(4)
-    
     ! Calculate the area weights for each class
     web_weight = delta_w * tw
     flange_weight = delta_f * tf
@@ -584,8 +565,6 @@ module mpc_modules
     joint_weight = flange_weight + 0.5d0 * tw * delta_w
     
     ! Calculate the shear weights
-    width = section_props(2)
-    depth = section_props(1)
     v_weights = shear_factors(p, n_sh, depth, width, tf, tw, delta_f, delta_w, classification, etang)
     ! Assign the area weights
     do ii = 1, n_sh
@@ -1115,26 +1094,26 @@ module mpc_modules
 
 ! ******************************************************************** !
 
-  function solve_weights(mrow, ncol, amat) result(wvec)
+  function solve_weights(mrow, ncol, amat, bvec) result(wvec)
     ! Returns the weight vector for equilibrium
     ! @input mrow: Number of rows in A.
     ! @input ncol: Number of columns in A.
-    ! @input amat: The equilibrium matrix A.
+    ! @input amat: (mrow,ncol) The equilibrium matrix A.
+    ! @input bvec: (mrow,1) Right-hand side vector.
     ! @returns: Weights that satisfy equilibrium.
     ! Input and output
     implicit none
     integer, intent(in) ::  mrow, ncol
-    real(8), intent(in) ::  amat(mrow, ncol)
+    real(8), intent(in) ::  amat(mrow, ncol), bvec(mrow)
     real(8)             ::  wvec(ncol)
     ! Internal
     integer             ::  lwork, info, lda, ldb, nrhs
     integer             ::  lwmax
     parameter(lwmax=1000)
-    real(8)             ::  work(lwmax), one_vec(ncol)
+    real(8)             ::  work(lwmax)
     external dgels
-    one_vec = 1.d0
     wvec = 0.d0
-    wvec(1:mrow) = matmul(amat, one_vec)
+    wvec(1:mrow) = bvec
     lda = mrow
     ldb = ncol
     nrhs = 1
@@ -1142,23 +1121,26 @@ module mpc_modules
     call dgels('N', mrow, ncol, nrhs, amat, lda, wvec, ldb, work, lwork, info)
     lwork = min(lwmax, int(work(1)))
     call dgels('N', mrow, ncol, nrhs, amat, lda, wvec, ldb, work, lwork, info)
-    wvec = wvec - one_vec
   end function
   
 ! ******************************************************************** !
 
-  function rigid_constraint(n_sh, xdef, xtrans, xcent) result(fvec)
+  function rigid_constraint(n_sh, xdef, xtrans, xcent, normal_vec, psi) result(fvec)
     ! Returns the rigid restraint forces
     ! Input and output
     implicit none
     integer, intent(in) ::  n_sh
-    real(8), intent(in) ::  xdef(3, n_sh), xtrans(3, n_sh), xcent(3)
+    real(8), intent(in) ::  xdef(3, n_sh), xtrans(3, n_sh), xcent(3), normal_vec(3), psi(n_sh)
     real(8)             ::  fvec(3*n_sh)
     ! Internal
-    real(8)             ::  amat(6, 3*n_sh), fdiag(3,3), wvec(3*n_sh)
+    integer             ::  neqn
+    parameter(neqn=7)
+    real(8)             ::  amat(neqn, 3*n_sh), fdiag(3,3), wvec(3*n_sh), one_vec(3*n_sh)
     integer             ::  ii
     ! Function start
+    one_vec = 1.d0
     fdiag = 0.d0
+    amat = 0.d0
     do ii = 1, n_sh
       fvec(3*ii-2:3*ii) = xdef(:, ii) - xtrans(:, ii)
       amat(1:3, 3*ii-2:3*ii) = 0.d0
@@ -1170,8 +1152,10 @@ module mpc_modules
       fdiag(3, 3) = fvec(3*ii)
       ! subtract the centroid location to take the moment about the centroid
       amat(4:6, 3*ii-2:3*ii) = matmul(-skew_sym(xdef(1:3, ii) - xcent), fdiag)
+      amat(7, 3*ii-2:3*ii) = psi(ii) * dot_product(normal_vec, fvec(3*ii-2:3*ii)) * normal_vec
     end do
-    wvec = solve_weights(6, 3*n_sh, amat)        
+    wvec = solve_weights(neqn, 3*n_sh, amat, matmul(amat, one_vec))
+    wvec = wvec - one_vec
     do ii = 1, 3*n_sh
       fvec(ii) = fvec(ii) * wvec(ii)
     end do
@@ -1225,5 +1209,55 @@ module mpc_modules
 
 ! ******************************************************************** !
 
+  function weights_def_config(n_sh, weights_ref, xdef, xc, normal_vec, psi) result(weights_def)
+    ! Returns the weights that are in equilibrium in the deformed configuation.
+    ! @param n_sh: Number of shell nodes on interface.
+    ! @param weights_ref: Weights in the reference configuration.
+    ! @param xdef: Shell nodes in the deformed configuration.
+    ! @param xc: Position of the centroid in the deformed configuration.
+    ! @param normal_vec: Unit vector normal to the cross-section interface in the deformed config.
+    ! @param psi: Warping fuction for each node.
+    ! @return: Weights adjusted for equilbirium in the deformed configuration.
+    implicit none
+    ! Input and output
+    integer, intent(in) ::  n_sh
+    real(8), intent(in) ::  weights_ref(3 * n_sh, 3), xdef(3, n_sh), xc(3), normal_vec(3), psi(n_sh)
+    real(8)             ::  weights_def(3 * n_sh, 3)
+    ! Internal
+    integer             ::  neqn
+    parameter(neqn=7)
+    real(8)             ::  i_vec(neqn), one_vec(3 * n_sh), b(neqn), equil_mat(neqn, 3 * n_sh), &
+                            weight_adjustment(3 * n_sh), diag_mat(3, 3)
+    integer             ::  i, j
+    !
+    diag_mat = 0.d0
+    one_vec = 1.d0
+    ! todo: can zero the matrix more efficiently in the loop (just need to adjust the equil_mat(1:3, *) assignment to zero as well)
+    equil_mat = 0.d0
+    do i = 1, 3
+      do j = 1, n_sh
+          equil_mat(1, 3*j-2) = weights_ref(3*j-2, i)
+          equil_mat(2, 3*j-1) = weights_ref(3*j-1, i)
+          equil_mat(3, 3*j)   = weights_ref(3*j, i)
+          diag_mat(1, 1) = weights_ref(3*j-2, i)
+          diag_mat(2, 2) = weights_ref(3*j-1, i)
+          diag_mat(3, 3) = weights_ref(3*j  , i)
+          equil_mat(4:6, 3*j-2:3*j) = matmul(-skew_sym(xdef(1:3, j) - xc), diag_mat)
+          equil_mat(7, 3*j-2:3*j) = psi(j) * dot_product(normal_vec, weights_ref(3*j-2:3*j, i)) &
+                                    * normal_vec
+      end do
+      i_vec = 0.d0
+      i_vec(i) = 1.d0        
+      b = i_vec - matmul(equil_mat, one_vec)        
+      weight_adjustment = one_vec + solve_weights(neqn, 3 * n_sh, equil_mat, b)
+      do j = 1, n_sh
+          weights_def(3*j-2, i) = weights_ref(3*j-2, i) * weight_adjustment(3*j-2)
+          weights_def(3*j-1, i) = weights_ref(3*j-1, i) * weight_adjustment(3*j-1)
+          weights_def(3*j  , i) = weights_ref(3*j  , i) * weight_adjustment(3*j)
+      end do
+    end do    
+  end function
+
+! ******************************************************************** !
 
 end module mpc_modules ! END SUBROUTINE MPC

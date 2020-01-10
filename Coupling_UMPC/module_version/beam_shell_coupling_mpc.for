@@ -81,10 +81,10 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   real(8), allocatable  :: disp_lin(:, :),bend_tang(:, :), &
                             my_torque(:, :), rotw(:, :), &
                             wtmod(:), tmod(:), tmod0(:), fvec(:), &
-                            x_trans(:, :)
+                            x_trans(:, :), weights_def(:, :)
   real(8)               ::  temp33(3, 3), wtmod_tot
   ! Defines the max number of inner iterations to do and the tolerance
-  parameter                 (n_inner=1, tol_inner=1.d-8)
+  parameter                 (n_inner=10, tol_inner=1.d-8)
   ! Section properties
   real(8)               ::  section_props(4)
   real(8)               ::  rigid_scale
@@ -121,11 +121,16 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   allocate(q_mat2(ndim, ndim * n_shell))
   allocate(fvec(ndim * n_shell))
   allocate(x_trans(ndim, n_shell))
-
+  allocate(weights_def(ndim*n_shell, 3))
 
 ! ******************************************************************** !
 ! Subroutine definition
 ! ******************************************************************** !
+  
+  ! Analysis properties
+  rigid_scale = 0.d-3
+  
+  ! For debugging
   stall_var = 0
   !       print *, 'time', time(1)
   !       if (abs(time(1)-0.57) < 0.0001) then
@@ -135,7 +140,7 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   !         end do
   !       end if
   
-  ! Retrieve the section properties from the global array
+  ! Retrieve the cross-section properties from the global array
   p_secprops = SMAFloatArrayAccess(2 * jtype + 3)
   
   ! Calculate the centroid locations
@@ -155,6 +160,8 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
     c_mat(:, i) = x_shell(:, i) - xc0
   end do
   r_ref = ini_config(c_mat, n_shell)
+  ! Compute the warping function at each node
+  psi_all = warp_fun(c_mat, n_shell, r_ref)
 
   ! Get the tangent
   !tmod = form_tmod_vec(n_shell, jtype)
@@ -191,6 +198,7 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
     u_cent(1:3) = zero
     do i = 1, n_shell
       temp33 = disp_lin(1:3, 3*i-2:3*i)
+      ! temp33 = weights_def(3*i-2:3*i, 1:3)
       u_cent(1:3) = u_cent(1:3) + matmul(temp33, u_shell(1:3, i))
     end do
     xc = xc0 + u_cent
@@ -215,7 +223,18 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
 
     ! Compute the linearized centroid displacement
     disp_lin=calc_disp_lin(n_shell,weights,total_area,r_ref,r_mat)
-
+    weights_def = weights_def_config(n_shell, transpose(disp_lin), x_shell_def, xc, r_tot(:, 3), psi_all)
+    
+    ! Add rigid constraint forces
+    r_tot = matmul(r_mat, r_ref)
+    do i = 1, n_shell
+      x_trans(1:3, i) = matmul(r_tot, c_mat(1:3, i)) + xc
+    end do
+    fvec = rigid_constraint(n_shell, x_shell_def, x_trans, xc, r_tot(:, 3), psi_all)
+    do i = 1, n_shell
+      disp_lin(2, 3*i-2:3*i) = disp_lin(2, 3*i-2:3*i) + rigid_scale * fvec(3*i-2:3*i)
+    end do
+    
     ! Check for convergene of the inner iterations
     if (norm2(u_cent-uc_prev)/(norm2(uc_prev)+1.d-9)<tol_inner) then
       exit
@@ -227,7 +246,6 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   q_mat = calc_q(op_quat, n_shell, g_mat)
 
   ! Compute the warping amplitude
-  psi_all = warp_fun(c_mat, n_shell, r_ref)
   t_def = matmul(r_mat, r_ref(:, 3))
   w_amp = warp_amp(x_shell,x_shell_def,u_cent,t_def,r_mat,psi_all)
 
@@ -235,7 +253,8 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   w_lin =calc_lin_w(x_shell_ref,n_shell,r_ref(:,3),psi_all,r_mat, weights(1, :))
 
   ! Compute the linearized centroid displacement
-  disp_lin=calc_disp_lin(n_shell,weights,total_area,r_ref,r_mat)
+  ! todo: can use d_mat instead of x_shell_def and xc
+  !weights_def = weights_def_config(n_shell, transpose(disp_lin), x_shell_def, xc, r_tot(:, 3), psi_all)
 
   ! Assign the A submatrix for the beam node and set active DOF
   forall(i = 1:maxdof) a(i, i, 1) = one
@@ -255,6 +274,7 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
     a_node = weights(1, i_sh) / total_area
     ! Displacement constraints
     a(1:3, 1:3, i) = -disp_lin(1:3, 3*i_sh-2:3*i_sh)
+    !a(1:3, 1:3, i) = -weights_def(3*i_sh-2:3*i_sh, 1:3)
     ! Rotation constraints
     q_mat(1:3, 3*i_sh-2:3*i_sh)=q_mat(1:3, 3*i_sh-2:3*i_sh)*a_node
     a(4:6, 1:3, i) = -q_mat(1:3, 3*i_sh-2:3*i_sh)
@@ -278,31 +298,17 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   ue(4:6) = extract_rotation(op_quat)
   ue(7) = w_amp
   
-  
-  print *, 'a before adjustment'
-  print *, a(2, 1:3, 2:)
-  
-  ! extra tangent stuff to be fixed up
-  r_tot = matmul(r_mat, r_ref)
-  do i = 1, n_shell
-    x_trans(1:3, i) = matmul(r_tot, c_mat(1:3, i)) + xc
-  end do
-  fvec = rigid_constraint(n_shell, x_shell_def, x_trans, xc)
-  rigid_scale = 1.d-3
-  do i = 1, n_shell
-    a(2, 1:3, 1+i) = a(2, 1:3, 1+i) - rigid_scale * fvec(3*i-2:3*i)
-  end do
-  
+  if (x(3,1) > 2500.) then
   print *, 'kinc', kinc
-  print *, 'x ref'
-  print *, x_shell_ref
-  print *, 'rot'
-  print *, r_mat
   print *, 'x def'
   print *, x_shell_def
-  
-  print *, 'a after adjustment'
-  print *, a(2, 1:3, 2:)
+  print *, 'ucent'
+  print *, u_cent
+  print *, 'rot'
+  print *, extract_rotation(op_quat)
+  print *, 'disp_lin'
+  print *, disp_lin(2, :)
+  end if
   
   return
 
