@@ -127,8 +127,8 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
 ! Subroutine definition
 ! ******************************************************************** !
   
-  ! Analysis properties
-  rigid_scale = 0.d-3
+  
+  print *, 'kinc', kinc
   
   ! For debugging
   stall_var = 0
@@ -194,14 +194,26 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   ! Iterate until convergence using the displacement linearization for the centroid
   u_cent(1:3) = zero
   do k_inner = 1, n_inner
+    ! Compute the centroid location
     uc_prev = u_cent
     u_cent(1:3) = zero
     do i = 1, n_shell
+      ! todo: if the deformed config does not affect the centroid location, do we need to bother with the extra computations here?
+      ! if (k_inner == 1) then
+      !   ! Want to use mean of points for the first inner iteration
+      !   temp33 = disp_lin(1:3, 3*i-2:3*i)
+      !   u_cent(1:3) = u_cent(1:3) + matmul(temp33, u_shell(1:3, i))
+      ! else
+      !   u_cent(1) = u_cent(1) + dot_product(weights_def(3*i-2:3*i, 1), u_shell(1:3, i))
+      !   u_cent(2) = u_cent(2) + dot_product(weights_def(3*i-2:3*i, 2), u_shell(1:3, i))
+      !   u_cent(3) = u_cent(3) + dot_product(weights_def(3*i-2:3*i, 3), u_shell(1:3, i))
+      ! end if
       temp33 = disp_lin(1:3, 3*i-2:3*i)
-      ! temp33 = weights_def(3*i-2:3*i, 1:3)
       u_cent(1:3) = u_cent(1:3) + matmul(temp33, u_shell(1:3, i))
     end do
+    
     xc = xc0 + u_cent
+    ! Center the deformed config on the centroid
     do i = 1, n_shell
       d_mat(:, i) = x_shell_def(:, i) - xc
     end do
@@ -222,25 +234,27 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
     r_mat = rot_mat(op_quat)
 
     ! Compute the linearized centroid displacement
-    disp_lin=calc_disp_lin(n_shell,weights,total_area,r_ref,r_mat)
-    weights_def = weights_def_config(n_shell, transpose(disp_lin), x_shell_def, xc, r_tot(:, 3), psi_all)
-    
-    ! Add rigid constraint forces
-    r_tot = matmul(r_mat, r_ref)
-    do i = 1, n_shell
-      x_trans(1:3, i) = matmul(r_tot, c_mat(1:3, i)) + xc
-    end do
-    fvec = rigid_constraint(n_shell, x_shell_def, x_trans, xc, r_tot(:, 3), psi_all)
-    do i = 1, n_shell
-      disp_lin(2, 3*i-2:3*i) = disp_lin(2, 3*i-2:3*i) + rigid_scale * fvec(3*i-2:3*i)
-    end do
+    disp_lin = calc_disp_lin(n_shell, weights, total_area, r_ref, r_mat)
     
     ! Check for convergene of the inner iterations
     if (norm2(u_cent-uc_prev)/(norm2(uc_prev)+1.d-9)<tol_inner) then
       exit
     end if
   end do  ! over k_inner
-
+    
+  print *, 'u'
+  print *, u_shell
+  print *, 'ref 2'
+  print *, disp_lin(2, :)
+  print *, 'r tot'
+  print *, transpose(r_tot)
+  print *, 'u cent'
+  print *, u_cent
+  print *, 'x def'
+  print *, x_shell_def
+  print *, 'def 2'
+  print *, weights_def(:, 2)
+  
   ! Compute the linearized rotation matrix
   g_mat = calc_g(op_quat, n_shell, b_mat, c_mat, lambda, r_mat)
   q_mat = calc_q(op_quat, n_shell, g_mat)
@@ -251,10 +265,6 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
 
   ! Compute the linearized warping 
   w_lin =calc_lin_w(x_shell_ref,n_shell,r_ref(:,3),psi_all,r_mat, weights(1, :))
-
-  ! Compute the linearized centroid displacement
-  ! todo: can use d_mat instead of x_shell_def and xc
-  !weights_def = weights_def_config(n_shell, transpose(disp_lin), x_shell_def, xc, r_tot(:, 3), psi_all)
 
   ! Assign the A submatrix for the beam node and set active DOF
   forall(i = 1:maxdof) a(i, i, 1) = one
@@ -267,14 +277,18 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   rotw = rot_weights(n_shell, x_shell_ref, weights(1, :), tmod)
   q_mat2 = lin_rot(n_shell, r_ref, r_mat, rotw)
 
+  ! todo: can use d_mat instead of x_shell_def and xc
+  r_tot = matmul(r_mat, r_ref)    
+  weights_def = weights_def_config(n_shell, u_shell, u_cent, transpose(disp_lin), x_shell_def, xc, r_tot(:, 3), psi_all)
+  
   ! Assign the A submatrices for the shell nodes
   do i = 2, n
     ! i_sh corresponds to the shell nodes since i starts at 2
     i_sh = i - 1
     a_node = weights(1, i_sh) / total_area
     ! Displacement constraints
-    a(1:3, 1:3, i) = -disp_lin(1:3, 3*i_sh-2:3*i_sh)
-    !a(1:3, 1:3, i) = -weights_def(3*i_sh-2:3*i_sh, 1:3)
+    !a(1:3, 1:3, i) = -disp_lin(1:3, 3*i_sh-2:3*i_sh)
+    a(1:3, 1:3, i) = -weights_def(3*i_sh-2:3*i_sh, 1:3)
     ! Rotation constraints
     q_mat(1:3, 3*i_sh-2:3*i_sh)=q_mat(1:3, 3*i_sh-2:3*i_sh)*a_node
     a(4:6, 1:3, i) = -q_mat(1:3, 3*i_sh-2:3*i_sh)
@@ -298,17 +312,14 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   ue(4:6) = extract_rotation(op_quat)
   ue(7) = w_amp
   
-  if (x(3,1) > 2500.) then
-  print *, 'kinc', kinc
-  print *, 'x def'
-  print *, x_shell_def
-  print *, 'ucent'
-  print *, u_cent
-  print *, 'rot'
-  print *, extract_rotation(op_quat)
-  print *, 'disp_lin'
-  print *, disp_lin(2, :)
-  end if
+  ! if (x(3,1) > 2500.) then
+  ! print *, 'ucent'
+  ! print *, u_cent
+  ! print *, 'rot'
+  ! print *, extract_rotation(op_quat)
+  ! print *, 'disp_lin'
+  ! print *, disp_lin(2, :)
+  ! end if
   
   return
 

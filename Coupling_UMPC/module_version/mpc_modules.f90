@@ -1209,9 +1209,11 @@ module mpc_modules
 
 ! ******************************************************************** !
 
-  function weights_def_config(n_sh, weights_ref, xdef, xc, normal_vec, psi) result(weights_def)
+  function weights_def_config(n_sh, u_shell, uc, weights_ref, xdef, xc, normal_vec, psi) result(weights_def)
     ! Returns the weights that are in equilibrium in the deformed configuation.
     ! @param n_sh: Number of shell nodes on interface.
+    ! @param u_shell: Displacement of the shell nodes
+    ! @param uc: Centroid displacement.
     ! @param weights_ref: Weights in the reference configuration.
     ! @param xdef: Shell nodes in the deformed configuration.
     ! @param xc: Position of the centroid in the deformed configuration.
@@ -1221,43 +1223,50 @@ module mpc_modules
     implicit none
     ! Input and output
     integer, intent(in) ::  n_sh
-    real(8), intent(in) ::  weights_ref(3 * n_sh, 3), xdef(3, n_sh), xc(3), normal_vec(3), psi(n_sh)
+    real(8), intent(in) ::  u_shell(3, n_sh), uc(3), weights_ref(3 * n_sh, 3), xdef(3, n_sh), xc(3), normal_vec(3), psi(n_sh)
     real(8)             ::  weights_def(3 * n_sh, 3)
     ! Internal
     integer             ::  neqn
-    parameter(neqn=7)
-    real(8)             ::  i_vec(neqn), one_vec(3 * n_sh), b(neqn), equil_mat(neqn, 3 * n_sh), &
+    parameter(neqn=8)
+    ! parameter(neqn=7)
+    real(8)             ::  b_target(neqn), one_vec(3 * n_sh), b(neqn), equil_mat(neqn, 3 * n_sh), &
                             weight_adjustment(3 * n_sh), diag_mat(3, 3)
     integer             ::  i, j
-    !
+    ! Function definition
     diag_mat = 0.d0
     one_vec = 1.d0
-    ! todo: can zero the matrix more efficiently in the loop (just need to adjust the equil_mat(1:3, *) assignment to zero as well)
     equil_mat = 0.d0
     do i = 1, 3
       do j = 1, n_sh
+          ! Force equilibrium conditions
           equil_mat(1, 3*j-2) = weights_ref(3*j-2, i)
           equil_mat(2, 3*j-1) = weights_ref(3*j-1, i)
-          equil_mat(3, 3*j)   = weights_ref(3*j, i)
+          equil_mat(3, 3*j)   = weights_ref(3*j,   i)
+          ! Moment equilibrium conditions
           diag_mat(1, 1) = weights_ref(3*j-2, i)
           diag_mat(2, 2) = weights_ref(3*j-1, i)
-          diag_mat(3, 3) = weights_ref(3*j  , i)
+          diag_mat(3, 3) = weights_ref(3*j,   i)
           equil_mat(4:6, 3*j-2:3*j) = matmul(-skew_sym(xdef(1:3, j) - xc), diag_mat)
-          equil_mat(7, 3*j-2:3*j) = psi(j) * dot_product(normal_vec, weights_ref(3*j-2:3*j, i)) &
-                                    * normal_vec
+          ! Bimoment equilibrium
+          equil_mat(7, 3*j-2:3*j) = psi(j) * dot_product(normal_vec, weights_ref(3*j-2:3*j, i)) * normal_vec
+          ! Centroid displacement consitency
+          equil_mat(8, 3*j-2:3*j) = weights_ref(3*j-2:3*j, i) * u_shell(1:3, j)
       end do
-      i_vec = 0.d0
-      i_vec(i) = 1.d0        
-      b = i_vec - matmul(equil_mat, one_vec)        
+      b_target = 0.d0
+      b_target(i) = 1.d0
+      b_target(8) = uc(i)
+      b = b_target - matmul(equil_mat, one_vec)
+      
       weight_adjustment = one_vec + solve_weights(neqn, 3 * n_sh, equil_mat, b)
+      print *, 'weight adj. norm, i = ', i, norm2(weight_adjustment)
       do j = 1, n_sh
           weights_def(3*j-2, i) = weights_ref(3*j-2, i) * weight_adjustment(3*j-2)
           weights_def(3*j-1, i) = weights_ref(3*j-1, i) * weight_adjustment(3*j-1)
-          weights_def(3*j  , i) = weights_ref(3*j  , i) * weight_adjustment(3*j)
+          weights_def(3*j  , i) = weights_ref(3*j,   i) * weight_adjustment(3*j)
       end do
-    end do    
+    end do
   end function
 
 ! ******************************************************************** !
 
-end module mpc_modules ! END SUBROUTINE MPC
+end module mpc_modules
