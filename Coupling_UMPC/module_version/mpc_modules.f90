@@ -1012,8 +1012,15 @@ module mpc_modules
     ! @input n_sh: Number of shell nodes on the interface
     ! @input r0: Rotation matrix from reference to initial configs
     ! @input r: Rotation matrix from initial to current configs
-    ! @input rw: Weights for the moments
+    ! @input rw: Weights for the moments / torque
     ! @returns: Matrix for the linearization of the rotations
+    !
+    ! Notes:
+    !   - rw ordering:
+    !     - rw(1, :) = axial due to moment about x
+    !     - rw(2, :) = axial due to moment about y
+    !     - rw(3, :) = shear in x due to moment about z (torsion)
+    !     - rw(4, :) = shear in y due to moment about z (torsion)
     implicit none
     integer, intent(in) ::  n_sh
     real(8), intent(in) ::  r(3, 3), r0(3, 3), rw(4, n_sh)
@@ -1137,10 +1144,14 @@ end function
   pure function calc_section_deform(ksec, sec_props, d, bf) result(usec)
     ! Returns the generalized section deformations for unit loads in each DOF.
     ! @input ksec: Normalized section stiffness matrix.
+    ! @input sec_props: "Regular" section properties
+    ! @input d: Section depth
+    ! @input bf: Section width
     ! @returns: Section deformations, column i contains the defomations due to a force in DOF i.
     ! 
     ! Notes:
     !   - Deformations: [centroid axial strain, strong axis curvature, weak axis curvature, torsion warping curvature]
+    !   - sec_props: [A, Ix, Iy, Iw]
     implicit none
     real(8), intent(in) ::  ksec(4, 4), sec_props(4), d, bf
     real(8)             ::  usec(4, 4)
@@ -1151,11 +1162,12 @@ end function
     normalization_factor(2) = sec_props(2) / (d / 2.d0)
     normalization_factor(3) = sec_props(3) / (bf / 2.d0)
     normalization_factor(4) = sec_props(4) / (d * bf / 4.d0)
-    kinv = matinv4(ksec)
+    ! Here we assume that the section is elastic -> section stiffness is identity matrix
+    ! Therefore, u_i = f_i
     do i = 1, 4
       f = 0.d0
       f(i) = 1.d0 /  normalization_factor(i)
-      usec(1:4, i) = matmul(kinv, f)
+      usec(1:4, i) = f
     end do
   end function
   
@@ -1185,133 +1197,7 @@ end function
       end do
     end do
   end function
-
-! ******************************************************************** !
-  ! pure function plastic_centroid(n_sh, xyz, etang, ak) result(xyz_bar)
-  !   ! Returns the plastic centroid of the cross-section.
-  !   ! @input n_sh: Number of shell elements.
-  !   ! @input xyz: Reference coordinates of the nodes
-  !   ! @input etang: Tangnet modulus for each node
-  !   ! @input ak: Nodal areas.
-  !   ! @returns: Coordinates of plastic centroid
-  !   implicit none
-  !   integer, intent(in) ::  n_sh
-  !   real(8), intent(in) ::  xyz(3, n_sh), etang(n_sh), ak(n_sh)
-  !   real(8)             ::  xyz_bar(3), xyz_tot
-  !   integer             ::  ii
-  !   ! Function start
-  !   xyz_bar = 0.d0
-  !   do ii = 1, n_sh
-  !     xyz_bar = etang(ii) * xyz(1:3, ii)
-  !     xyz_tot = xyz_tot + etang(ii) * ak(ii)
-  !   end do
-  !   xyz_bar = xyz_bar / xyz_tot
-  ! end function
-! ******************************************************************** !
-  ! pure function pl_rot_weights(n_sh, xyz, area, tmod, xyz_bar) result(rw)
-  !   ! Returns the weights for applied moments.
-  !   ! @input n_sh: Number of shell nodes on the interface
-  !   ! @input xyz: Coords of shell nodes in reference config
-  !   ! @input area: Tributary area of each shell node
-  !   ! @input tmod: Tangent modulus associated with each node
-  !   ! @returns: Mx, My, Mz weights
-  !   implicit none
-  !   integer, intent(in) ::  n_sh
-  !   real(8), intent(in) ::  xyz(3, n_sh), area(n_sh), tmod(n_sh)
-  !   integer             ::  ii
-  !   real(8)             ::  rw(4, n_sh)
-  !   real(8)             ::  mx(n_sh), my(n_sh), mz(2, n_sh), mxtot, mytot, mztot
-  !   do ii = 1, n_sh
-  !     mx(ii) = xyz(2, ii) * area(ii) * tmod(ii)
-  !     mxtot = mxtot + mx(ii) * xyz(2, ii)
-  !     my(ii) = -xyz(1, ii) * area(ii) * tmod(ii)
-  !     mytot = mytot + my(ii) * xyz(1, ii)
-  !     mz(1:2, ii) = [-xyz(2, ii), xyz(1, ii)] * area(ii) * tmod(ii)
-  !     mztot = mztot + area(ii) * tmod(ii) * norm2(xyz(1:2, ii))**2
-  !   end do
-  !   rw(1, :) = mx / mxtot
-  !   rw(2, :) = my / abs(mytot)
-  !   rw(3:4, :) = mz / mztot
-  ! end function
-
-! ******************************************************************** !
-
-  function form_tmod_vec(n_sh, beam_id) result(tmod)
-    ! Returns the tangent modulus for each node.
-    ! @input n_sh: Number of shell elements on interface.
-    ! @input beam_id: Beam node tag for the interface.
-    ! @returns: The tangent modulus averaged for each node.
-!DIR$ NOFREEFORM
-#include <SMAAspUserSubroutines.hdr>
-!DIR$ FREEFORM
-    integer, intent(in)   ::  n_sh, beam_id
-    integer               ::  asize
-    parameter                 (asize=1000)
-    integer               ::  TMOD_ARR_ID, ID_ADJ
-    parameter                 (TMOD_ARR_ID=1, ID_ADJ=3)
-    real(8)               ::  tmod_arr(asize)
-    real(8)               ::  tmod(n_sh), nelem, tm_temp
-    integer               ::  info_arr(3*n_sh), interf_id, ii, elem_indexs(3), kk, jj
-    pointer(p_tmod, tmod_arr)
-    pointer(p_info, info_arr)
-    ! Function start
-    interf_id = 2 * beam_id + 2
-    p_tmod = SMAFloatArrayAccess(TMOD_ARR_ID)
-    p_info = SMAIntArrayAccess(interf_id)
-    tmod = 0.d0
-    do ii = 1, n_sh
-      elem_indexs(1:3) = info_arr(3*ii-2:3*ii)
-      nelem = 0.
-      do jj = 1, 3
-        if (elem_indexs(jj) /= 0) then
-          ! Average over the sections (assumes 5 sections)
-          tm_temp = 0.d0
-          do kk = 1, 5
-            tm_temp = tm_temp + tmod_arr(5*elem_indexs(jj) - 5 + kk)
-          end do
-          tm_temp = tm_temp / 5.
-          tmod(ii) = tmod(ii) + tm_temp
-          nelem = nelem + 1.
-        end if
-      end do
-      ! Average over the attached elem
-      tmod(ii) = tmod(ii) / nelem
-    end do
-    tmod = tmod / maxval(abs(tmod))
-  end function
-
-! ******************************************************************** !
-
-  pure function matinv4(A) result(B)
-    !! Performs a direct calculation of the inverse of a 4×4 matrix.
-    ! Adapted from http://fortranwiki.org/fortran/show/Matrix+inversion
-    implicit none
-    real(8), intent(in) :: A(4,4)   !! Matrix
-    real(8)             :: B(4,4)   !! Inverse matrix
-    real(8)             :: detinv
-
-    ! Calculate the inverse determinant of the matrix
-    detinv = 1.d0 / (A(1,1)*(A(2,2)*(A(3,3)*A(4,4)-A(3,4)*A(4,3))+A(2,3)*(A(3,4)*A(4,2)-A(3,2)*A(4,4))+A(2,4)*(A(3,2)*A(4,3)-A(3,3)*A(4,2))) - A(1,2)*(A(2,1)*(A(3,3)*A(4,4)-A(3,4)*A(4,3))+A(2,3)*(A(3,4)*A(4,1)-A(3,1)*A(4,4))+A(2,4)*(A(3,1)*A(4,3)-A(3,3)*A(4,1))) + A(1,3)*(A(2,1)*(A(3,2)*A(4,4)-A(3,4)*A(4,2))+A(2,2)*(A(3,4)*A(4,1)-A(3,1)*A(4,4))+A(2,4)*(A(3,1)*A(4,2)-A(3,2)*A(4,1))) - A(1,4)*(A(2,1)*(A(3,2)*A(4,3)-A(3,3)*A(4,2))+A(2,2)*(A(3,3)*A(4,1)-A(3,1)*A(4,3))+A(2,3)*(A(3,1)*A(4,2)-A(3,2)*A(4,1))))
-
-    ! Calculate the inverse of the matrix
-    B(1,1) = detinv*(A(2,2)*(A(3,3)*A(4,4)-A(3,4)*A(4,3))+A(2,3)*(A(3,4)*A(4,2)-A(3,2)*A(4,4))+A(2,4)*(A(3,2)*A(4,3)-A(3,3)*A(4,2)))
-    B(2,1) = detinv*(A(2,1)*(A(3,4)*A(4,3)-A(3,3)*A(4,4))+A(2,3)*(A(3,1)*A(4,4)-A(3,4)*A(4,1))+A(2,4)*(A(3,3)*A(4,1)-A(3,1)*A(4,3)))
-    B(3,1) = detinv*(A(2,1)*(A(3,2)*A(4,4)-A(3,4)*A(4,2))+A(2,2)*(A(3,4)*A(4,1)-A(3,1)*A(4,4))+A(2,4)*(A(3,1)*A(4,2)-A(3,2)*A(4,1)))
-    B(4,1) = detinv*(A(2,1)*(A(3,3)*A(4,2)-A(3,2)*A(4,3))+A(2,2)*(A(3,1)*A(4,3)-A(3,3)*A(4,1))+A(2,3)*(A(3,2)*A(4,1)-A(3,1)*A(4,2)))
-    B(1,2) = detinv*(A(1,2)*(A(3,4)*A(4,3)-A(3,3)*A(4,4))+A(1,3)*(A(3,2)*A(4,4)-A(3,4)*A(4,2))+A(1,4)*(A(3,3)*A(4,2)-A(3,2)*A(4,3)))
-    B(2,2) = detinv*(A(1,1)*(A(3,3)*A(4,4)-A(3,4)*A(4,3))+A(1,3)*(A(3,4)*A(4,1)-A(3,1)*A(4,4))+A(1,4)*(A(3,1)*A(4,3)-A(3,3)*A(4,1)))
-    B(3,2) = detinv*(A(1,1)*(A(3,4)*A(4,2)-A(3,2)*A(4,4))+A(1,2)*(A(3,1)*A(4,4)-A(3,4)*A(4,1))+A(1,4)*(A(3,2)*A(4,1)-A(3,1)*A(4,2)))
-    B(4,2) = detinv*(A(1,1)*(A(3,2)*A(4,3)-A(3,3)*A(4,2))+A(1,2)*(A(3,3)*A(4,1)-A(3,1)*A(4,3))+A(1,3)*(A(3,1)*A(4,2)-A(3,2)*A(4,1)))
-    B(1,3) = detinv*(A(1,2)*(A(2,3)*A(4,4)-A(2,4)*A(4,3))+A(1,3)*(A(2,4)*A(4,2)-A(2,2)*A(4,4))+A(1,4)*(A(2,2)*A(4,3)-A(2,3)*A(4,2)))
-    B(2,3) = detinv*(A(1,1)*(A(2,4)*A(4,3)-A(2,3)*A(4,4))+A(1,3)*(A(2,1)*A(4,4)-A(2,4)*A(4,1))+A(1,4)*(A(2,3)*A(4,1)-A(2,1)*A(4,3)))
-    B(3,3) = detinv*(A(1,1)*(A(2,2)*A(4,4)-A(2,4)*A(4,2))+A(1,2)*(A(2,4)*A(4,1)-A(2,1)*A(4,4))+A(1,4)*(A(2,1)*A(4,2)-A(2,2)*A(4,1)))
-    B(4,3) = detinv*(A(1,1)*(A(2,3)*A(4,2)-A(2,2)*A(4,3))+A(1,2)*(A(2,1)*A(4,3)-A(2,3)*A(4,1))+A(1,3)*(A(2,2)*A(4,1)-A(2,1)*A(4,2)))
-    B(1,4) = detinv*(A(1,2)*(A(2,4)*A(3,3)-A(2,3)*A(3,4))+A(1,3)*(A(2,2)*A(3,4)-A(2,4)*A(3,2))+A(1,4)*(A(2,3)*A(3,2)-A(2,2)*A(3,3)))
-    B(2,4) = detinv*(A(1,1)*(A(2,3)*A(3,4)-A(2,4)*A(3,3))+A(1,3)*(A(2,4)*A(3,1)-A(2,1)*A(3,4))+A(1,4)*(A(2,1)*A(3,3)-A(2,3)*A(3,1)))
-    B(3,4) = detinv*(A(1,1)*(A(2,4)*A(3,2)-A(2,2)*A(3,4))+A(1,2)*(A(2,1)*A(3,4)-A(2,4)*A(3,1))+A(1,4)*(A(2,2)*A(3,1)-A(2,1)*A(3,2)))
-    B(4,4) = detinv*(A(1,1)*(A(2,2)*A(3,3)-A(2,3)*A(3,2))+A(1,2)*(A(2,3)*A(3,1)-A(2,1)*A(3,3))+A(1,3)*(A(2,1)*A(3,2)-A(2,2)*A(3,1)))
-  end function
-
+  
 ! ******************************************************************** !
 
 end module mpc_modules
