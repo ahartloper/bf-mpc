@@ -59,7 +59,7 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   ! Centroids (deformed and initial)
   real(8)               :: xc(ndim), xc0(ndim), u_cent(ndim)
   ! Rotation matrices (to get deformed, reference)
-  real(8)               :: r_mat(ndim, ndim), r_ref(ndim, ndim), r_tot(ndim, ndim)
+  real(8)               :: r_mat(ndim, ndim), r_ref(ndim, ndim)
   ! Orientation normal to beam plane
   real(8)               :: t_def(ndim)
   ! Arrays that depend on the number of nodes
@@ -67,7 +67,8 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
                            q_mat(:, :), x_shell_def(:, :), &
                            x_shell(:, :), u_shell(:, :), &
                            w_lin(:), psi_all(:), weights(:, :), &
-                           x_shell_ref(:, :), q_mat2(:, :)
+                           x_shell_ref(:, :), q_mat2(:, :), &
+                           w_lin2(:), disp_lin2(:, :)
   ! For the rotation quaternion and computations
   real(8)               ::  b_mat(quatdim, quatdim), &
                             beta(quatdim, quatdim), &
@@ -129,7 +130,7 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
 ! ******************************************************************** !
   
   
-  print *, 'kinc', kinc
+  print *, 'kinc', kinc, time(1)
   
   ! For debugging
   stall_var = 0
@@ -166,9 +167,9 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   psi_all = warp_fun(c_mat, n_shell, r_ref)
 
   ! Get the tangent
-  !tmod = form_tmod_vec(n_shell, jtype)
-  tmod = 1.d0
+  tmod = form_tmod_vec(n_shell, jtype)
   tmod0 = 1.d0
+  ! tmod = 1.d0
 
   ! Calculate the nodal weights for displacement linearization
   ! todo: pass x_shell_ref where needed
@@ -177,12 +178,11 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   total_area = zero
   wtmod_tot = 0.d0
   do i = 1, n_shell
-    wtmod(i) = weights(1, i) * tmod(i)
+    ! wtmod(i) = weights(1, i) * tmod(i)
+    wtmod(i) = weights(1, i)
     total_area = total_area + weights(1, i)
     wtmod_tot = wtmod_tot + wtmod(i)
-  end do  
-  weights(1, :) = wtmod(:)
-  total_area = wtmod_tot
+  end do
 
   ! Initialize the linearization to the arithmetic mean
   temp33 = zero
@@ -200,20 +200,10 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
     uc_prev = u_cent
     u_cent(1:3) = zero
     do i = 1, n_shell
-      ! todo: if the deformed config does not affect the centroid location, do we need to bother with the extra computations here?
-      ! if (k_inner == 1) then
-      !   ! Want to use mean of points for the first inner iteration
-      !   temp33 = disp_lin(1:3, 3*i-2:3*i)
-      !   u_cent(1:3) = u_cent(1:3) + matmul(temp33, u_shell(1:3, i))
-      ! else
-      !   u_cent(1) = u_cent(1) + dot_product(weights_def(3*i-2:3*i, 1), u_shell(1:3, i))
-      !   u_cent(2) = u_cent(2) + dot_product(weights_def(3*i-2:3*i, 2), u_shell(1:3, i))
-      !   u_cent(3) = u_cent(3) + dot_product(weights_def(3*i-2:3*i, 3), u_shell(1:3, i))
-      ! end if
       temp33 = disp_lin(1:3, 3*i-2:3*i)
       u_cent(1:3) = u_cent(1:3) + matmul(temp33, u_shell(1:3, i))
     end do
-    
+
     xc = xc0 + u_cent
     ! Center the deformed config on the centroid
     do i = 1, n_shell
@@ -243,20 +233,7 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
       exit
     end if
   end do  ! over k_inner
-    
-  print *, 'u'
-  print *, u_shell
-  print *, 'ref 2'
-  print *, disp_lin(2, :)
-  print *, 'r tot'
-  print *, transpose(r_tot)
-  print *, 'u cent'
-  print *, u_cent
-  print *, 'x def'
-  print *, x_shell_def
-  print *, 'def 2'
-  print *, weights_def(:, 2)
-  
+
   ! Compute the linearized rotation matrix
   g_mat = calc_g(op_quat, n_shell, b_mat, c_mat, lambda, r_mat)
   q_mat = calc_q(op_quat, n_shell, g_mat)
@@ -305,6 +282,24 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
     w_lin2(3*i-2:3*i) = t_def * f_nodes(4, i)
   end do
   
+  ! Compute the plastic properties
+  weights(1, :) = wtmod(:)
+  xy_bar = normalized_coords(n_shell, x_shell_ref(1:2, :), section_props(1), section_props(2))
+  sec_props = compute_section_props(n_shell, xy_bar, weights(1, :))
+  sp_dimensional = compute_section_props(n_shell, x_shell_ref(1:2, :), weights(1, :))
+  ksec = section_tangent(n_shell, xy_bar, weights(1, :), tmod, sec_props)
+  usec = calc_section_deform(ksec, sp_dimensional, section_props(1), section_props(2))
+  f_nodes = nodal_forces(n_shell, xy_bar, weights(1, :), tmod, usec)
+  weights(1, :) = f_nodes(1, :)
+  disp_lin = calc_disp_lin(n_shell, weights, 1.d0, r_ref, r_mat)
+  rotw = rot_weights(n_shell, x_shell_ref, weights(1, :), tmod0)
+  rotw(1:2, :) = f_nodes(2:3, :)
+  q_mat = lin_rot(n_shell, r_ref, r_mat, rotw)
+  ! Linearized warping
+  do i = 1, n_shell
+    w_lin(3*i-2:3*i) = t_def * f_nodes(4, i)
+  end do
+
   ! Assign the A submatrices for the shell nodes
   do i = 2, n
     ! i_sh corresponds to the shell nodes since i starts at 2
@@ -312,12 +307,15 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
     ! a_node = weights(1, i_sh) / total_area
     a_node = wtmod(i_sh) / wtmod_tot
     ! Displacement constraints
-    !a(1:3, 1:3, i) = -disp_lin(1:3, 3*i_sh-2:3*i_sh)
-    a(1:3, 1:3, i) = -weights_def(3*i_sh-2:3*i_sh, 1:3)
+    ! a(1:3, 1:3, i) = -disp_lin(1:3, 3*i_sh-2:3*i_sh)
+    ! a(1:3, 1:3, i) = -disp_lin2(1:3, 3*i_sh-2:3*i_sh)
+    a(1:3, 1:3, i) = -disp_lin(1:3, 3*i_sh-2:3*i_sh)*0.1-disp_lin2(1:3, 3*i_sh-2:3*i_sh)*0.9
+
     ! Rotation constraints
-    q_mat(1:3, 3*i_sh-2:3*i_sh)=q_mat(1:3, 3*i_sh-2:3*i_sh)*a_node
-    a(4:6, 1:3, i) = -q_mat(1:3, 3*i_sh-2:3*i_sh)
-    !a(4:6, 1:3, i) = -q_mat2(1:3, 3*i_sh-2:3*i_sh)
+    ! q_mat(1:3, 3*i_sh-2:3*i_sh)=q_mat(1:3, 3*i_sh-2:3*i_sh)*a_node
+    ! a(4:6, 1:3, i) = -q_mat(1:3, 3*i_sh-2:3*i_sh)
+    ! a(4:6, 1:3, i) = -q_mat2(1:3, 3*i_sh-2:3*i_sh)
+    a(4:6, 1:3, i) = -q_mat(1:3, 3*i_sh-2:3*i_sh)*0.1-q_mat2(1:3, 3*i_sh-2:3*i_sh)*0.9
 
     ! Address tangential due to bending moment
     !a(4, 1:3, i) = a(4, 1:3, i) + bend_tang(1:3, i_sh)
@@ -325,7 +323,10 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
     !a(6, 1:3, i) = my_torque(1:3, i_sh)
 
     ! Warping constraint
-    a(7, 1:3, i) = -w_lin(3*i_sh-2:3*i_sh)
+    ! a(7, 1:3, i) = -w_lin(3*i_sh-2:3*i_sh)
+    ! a(7, 1:3, i) = -w_lin2(3*i_sh-2:3*i_sh)
+    a(7, 1:3, i) = -w_lin(3*i_sh-2:3*i_sh)*0.1-w_lin2(3*i_sh-2:3*i_sh)*0.9
+
     ! Set the active DOF (displacement) in the shell elements
     jdof(1, i) = 1
     jdof(2, i) = 2
@@ -337,15 +338,4 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   ue(4:6) = extract_rotation(op_quat)
   ue(7) = w_amp
   
-  ! if (x(3,1) > 2500.) then
-  ! print *, 'ucent'
-  ! print *, u_cent
-  ! print *, 'rot'
-  ! print *, extract_rotation(op_quat)
-  ! print *, 'disp_lin'
-  ! print *, disp_lin(2, :)
-  ! end if
-  
-  return
-
 end subroutine
