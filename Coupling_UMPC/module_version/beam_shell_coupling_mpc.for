@@ -80,14 +80,14 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   real(8)               ::  tol_inner, uc_prev(3)
   real(8), allocatable  :: disp_lin(:, :),bend_tang(:, :), &
                             my_torque(:, :), rotw(:, :), &
-                            wtmod(:), tmod(:), tmod0(:), fvec(:), &
-                            x_trans(:, :), weights_def(:, :)
-  real(8)               ::  temp33(3, 3), wtmod_tot
+                            wtmod(:), tmod(:), tmod0(:), xy_bar(:, :), f_nodes(:, :)
+  real(8)               ::  temp33(3, 3), wtmod_tot, r1, ksec(4, 4), usec(4, 4)
   ! Defines the max number of inner iterations to do and the tolerance
   parameter                 (n_inner=10, tol_inner=1.d-8)
   ! Section properties
-  real(8)               ::  section_props(4)
+  real(8)               ::  section_props(4), d_cl
   real(8)               ::  rigid_scale
+  real(8)               ::  sec_props(4), sp_dimensional(4)
   ! Numerical parameters
   real(8)               :: one, two, zero
   parameter                (one=1.0d0, two=2.0d0, zero=0.d0)
@@ -119,9 +119,10 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   allocate(wtmod(n_shell))
   allocate(rotw(4, n_shell))
   allocate(q_mat2(ndim, ndim * n_shell))
-  allocate(fvec(ndim * n_shell))
-  allocate(x_trans(ndim, n_shell))
-  allocate(weights_def(ndim*n_shell, 3))
+  allocate(xy_bar(2, n_shell))
+  allocate(f_nodes(4, n_shell))
+  allocate(disp_lin2(ndim, ndim * n_shell))
+  allocate(w_lin2(ndim * n_shell))
 
 ! ******************************************************************** !
 ! Subroutine definition
@@ -141,6 +142,7 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   !       end if
   
   ! Retrieve the cross-section properties from the global array
+  ! section_props = [d, bf, tf, tw]
   p_secprops = SMAFloatArrayAccess(2 * jtype + 3)
   
   ! Calculate the centroid locations
@@ -221,9 +223,9 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
     ! Compute the optimal rotation quaternion
     b_mat(:, :) = zero
     do i = 1, n_shell
-      beta=left_quat(zero,d_mat(:,i))-right_quat(zero,c_mat(:,i))
+      beta=left_quat(zero,d_mat(:,i)) - right_quat(zero,c_mat(:,i))
       beta_T = transpose(beta)
-      b_mat = b_mat+wtmod(i)/wtmod_tot*matmul(beta_T,beta)
+      b_mat = b_mat + wtmod(i) / wtmod_tot * matmul(beta_T,beta)
     end do
     lam_q = calc_opquat(b_mat)
     
@@ -264,28 +266,51 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   w_amp = warp_amp(x_shell,x_shell_def,u_cent,t_def,r_mat,psi_all)
 
   ! Compute the linearized warping 
-  w_lin =calc_lin_w(x_shell_ref,n_shell,r_ref(:,3),psi_all,r_mat, weights(1, :))
+  w_lin = calc_lin_w(x_shell_ref,n_shell,r_ref(:,3),psi_all,r_mat, weights(1, :))
 
   ! Assign the A submatrix for the beam node and set active DOF
   forall(i = 1:maxdof) a(i, i, 1) = one
   forall(i = 1:maxdof) jdof(i, 1) = i
   
   ! todo: clean this up with actual values (if actually used)
-  bend_tang = tang_force_b(n_shell, x_shell_ref, r_ref, r_mat, 25.0d0, 25.0d0, 28.d0, 14.5d0, 300.d0, 472.d0)
-  my_torque = torquer(n_shell, x_shell_ref, r_mat, weights(1, :), 472.d0)
+  ! bend_tang = tang_force_b(n_shell, x_shell_ref, r_ref, r_mat, 25.0d0, 25.0d0, 28.d0, 14.5d0, 300.d0, 472.d0)
 
-  rotw = rot_weights(n_shell, x_shell_ref, weights(1, :), tmod)
+  ! Compute the inelastic nodal forces based on the normal stresses
+  xy_bar = normalized_coords(n_shell, x_shell_ref(1:2, :), section_props(1), section_props(2))
+  sec_props = compute_section_props(n_shell, xy_bar, weights(1, :))
+  sp_dimensional = compute_section_props(n_shell, x_shell_ref(1:2, :), weights(1, :))
+  ! ksec = section_tangent(n_shell, xy_bar, weights(1, :), tmod, sec_props)
+  ksec = section_tangent(n_shell, xy_bar, weights(1, :), tmod0, sec_props)
+  usec = calc_section_deform(ksec, sp_dimensional, section_props(1), section_props(2))
+  ! f_nodes = nodal_forces(n_shell, xy_bar, weights(1, :), tmod, usec)
+  f_nodes = nodal_forces(n_shell, xy_bar, weights(1, :), tmod0, usec)
+
+  ! Rotation linearization (inelastic)
+  ! Torque weights
+  d_cl = section_props(1) - section_props(3)
+  my_torque = torquer(n_shell, x_shell_ref, r_mat, weights(1, :), d_cl)
+  ! todo: use the torque weights
+  ! at the moment replace the Mx and My with the ones computed using the tangent modulus
+  rotw = rot_weights(n_shell, x_shell_ref, weights(1, :), tmod0)
+  rotw(1:2, :) = f_nodes(2:3, :)
   q_mat2 = lin_rot(n_shell, r_ref, r_mat, rotw)
 
-  ! todo: can use d_mat instead of x_shell_def and xc
-  r_tot = matmul(r_mat, r_ref)    
-  weights_def = weights_def_config(n_shell, u_shell, u_cent, transpose(disp_lin), x_shell_def, xc, r_tot(:, 3), psi_all)
+  ! Rotate the inelastic nodal forces for displacement
+  ! todo: Fix this hack that replaces the area with the tangent normalized one
+  weights(1, :) = f_nodes(1, :)
+  disp_lin2 = calc_disp_lin(n_shell, weights, 1.d0, r_ref, r_mat)
+
+  ! Linearized warping
+  do i = 1, n_shell
+    w_lin2(3*i-2:3*i) = t_def * f_nodes(4, i)
+  end do
   
   ! Assign the A submatrices for the shell nodes
   do i = 2, n
     ! i_sh corresponds to the shell nodes since i starts at 2
     i_sh = i - 1
-    a_node = weights(1, i_sh) / total_area
+    ! a_node = weights(1, i_sh) / total_area
+    a_node = wtmod(i_sh) / wtmod_tot
     ! Displacement constraints
     !a(1:3, 1:3, i) = -disp_lin(1:3, 3*i_sh-2:3*i_sh)
     a(1:3, 1:3, i) = -weights_def(3*i_sh-2:3*i_sh, 1:3)

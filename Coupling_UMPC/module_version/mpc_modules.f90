@@ -432,7 +432,7 @@ module mpc_modules
     ! Bimom = (M_f,t + M_f,b) * (d_cl / 2)
     d_cl = maxval(c2(2, :))
     we_total = we_total * d_cl
-    w_lin = w_lin / we_total      
+    w_lin = w_lin / we_total
     
   end function
 ! ******************************************************************** !
@@ -1003,7 +1003,7 @@ module mpc_modules
     rw(1, :) = mx / mxtot
     rw(2, :) = my / abs(mytot)
     rw(3:4, :) = mz / mztot
-  end
+  end function
 
 ! ******************************************************************** !
 
@@ -1043,123 +1043,196 @@ module mpc_modules
       s = matmul(rr0, matmul(s_bar, rr0_T))
       linr(1:3, 3*ii-2:3*ii) = transpose(s)
     end do        
-  end
-  
-! ******************************************************************** !
-!       pure function plastic_centroid(n_sh,xyz,etang,ak) result(xyz_bar)
-!         ! Returns the plastic centroid of the cross-section.
-!         ! @input n_sh: Number of shell elements.
-!         ! @input xyz: Reference coordinates of the nodes
-!         ! @input etang: Tangnet modulus for each node
-!         ! @input ak: Nodal areas.
-!         ! @returns: Coordinates of plastic centroid
-!         integer, intent(in) ::  n_sh
-!         real(8), intent(in) ::  xyz(3, n_sh), etang(n_sh), ak(n_sh)
-!         real(8)             ::  xyz_bar(3), xyz_tot
-!         integer             ::  ii
-!         ! Function start
-!         xyz_bar = 0.d0
-!         do ii = 1, n_sh
-!           xyz_bar = etang(ii) * xyz(1:3, ii)
-!           xyz_tot = xyz_tot + etang(ii) * ak(ii)
-!         end do
-!         xyz_bar = xyz_bar / xyz_tot
-!         end function
-! ******************************************************************** !
-!       pure function pl_rot_weights(n_sh,xyz,area,tmod,xyz_bar)result(rw)
-!         ! Returns the weights for applied moments.
-!         ! @input n_sh: Number of shell nodes on the interface
-!         ! @input xyz: Coords of shell nodes in reference config
-!         ! @input area: Tributary area of each shell node
-!         ! @input tmod: Tangent modulus associated with each node
-!         ! @returns: Mx,My,Mz weights
-!         integer, intent(in) ::  n_sh
-!         real(8), intent(in) ::  xyz(3, n_sh), area(n_sh), tmod(n_sh)
-!         integer             ::  ii
-!         real(8)             ::  rw(4, n_sh)
-!         real(8)             ::  mx(n_sh), my(n_sh), mz(2, n_sh), mxtot,
-!      1                          mytot, mztot
-!         do ii = 1, n_sh
-!           mx(ii) = xyz(2, ii) * area(ii) * tmod(ii)
-!           mxtot = mxtot + mx(ii) * xyz(2, ii)
-!           my(ii) = -xyz(1, ii) * area(ii) * tmod(ii)
-!           mytot = mytot + my(ii) * xyz(1, ii)
-!           mz(1:2, ii) = [-xyz(2, ii), xyz(1, ii)] * area(ii) * tmod(ii)
-!           mztot = mztot + area(ii) * tmod(ii) * norm2(xyz(1:2, ii))**2
-!         end do
-!         rw(1, :) = mx / mxtot
-!         rw(2, :) = my / abs(mytot)
-!         rw(3:4, :) = mz / mztot
-!       end
-
-! ******************************************************************** !
-
-  function solve_weights(mrow, ncol, amat, bvec) result(wvec)
-    ! Returns the weight vector for equilibrium
-    ! @input mrow: Number of rows in A.
-    ! @input ncol: Number of columns in A.
-    ! @input amat: (mrow,ncol) The equilibrium matrix A.
-    ! @input bvec: (mrow,1) Right-hand side vector.
-    ! @returns: Weights that satisfy equilibrium.
-    ! Input and output
-    implicit none
-    integer, intent(in) ::  mrow, ncol
-    real(8), intent(in) ::  amat(mrow, ncol), bvec(mrow)
-    real(8)             ::  wvec(ncol)
-    ! Internal
-    integer             ::  lwork, info, lda, ldb, nrhs
-    integer             ::  lwmax
-    parameter(lwmax=1000)
-    real(8)             ::  work(lwmax)
-    external dgels
-    wvec = 0.d0
-    wvec(1:mrow) = bvec
-    lda = mrow
-    ldb = ncol
-    nrhs = 1
-    lwork = -1
-    call dgels('N', mrow, ncol, nrhs, amat, lda, wvec, ldb, work, lwork, info)
-    lwork = min(lwmax, int(work(1)))
-    call dgels('N', mrow, ncol, nrhs, amat, lda, wvec, ldb, work, lwork, info)
   end function
   
 ! ******************************************************************** !
 
-  function rigid_constraint(n_sh, xdef, xtrans, xcent, normal_vec, psi) result(fvec)
-    ! Returns the rigid restraint forces
-    ! Input and output
+  pure function normalized_coords(n_sh, xy, d, bf) result(xy_bar)
+    ! Returns the normalized x,y-coordinates of all the nodes.
     implicit none
     integer, intent(in) ::  n_sh
-    real(8), intent(in) ::  xdef(3, n_sh), xtrans(3, n_sh), xcent(3), normal_vec(3), psi(n_sh)
-    real(8)             ::  fvec(3*n_sh)
-    ! Internal
-    integer             ::  neqn
-    parameter(neqn=7)
-    real(8)             ::  amat(neqn, 3*n_sh), fdiag(3,3), wvec(3*n_sh), one_vec(3*n_sh)
-    integer             ::  ii
+    real(8), intent(in) ::  xy(2, n_sh), d, bf
+    real(8)             ::  xy_bar(2, n_sh)
+    integer             ::  i
     ! Function start
-    one_vec = 1.d0
-    fdiag = 0.d0
-    amat = 0.d0
-    do ii = 1, n_sh
-      fvec(3*ii-2:3*ii) = xdef(:, ii) - xtrans(:, ii)
-      amat(1:3, 3*ii-2:3*ii) = 0.d0
-      amat(1, 3*ii-2) = fvec(3*ii-2)
-      amat(2, 3*ii-1) = fvec(3*ii-1)
-      amat(3, 3*ii) = fvec(3*ii)
-      fdiag(1, 1) = fvec(3*ii-2)
-      fdiag(2, 2) = fvec(3*ii-1)
-      fdiag(3, 3) = fvec(3*ii)
-      ! subtract the centroid location to take the moment about the centroid
-      amat(4:6, 3*ii-2:3*ii) = matmul(-skew_sym(xdef(1:3, ii) - xcent), fdiag)
-      amat(7, 3*ii-2:3*ii) = psi(ii) * dot_product(normal_vec, fvec(3*ii-2:3*ii)) * normal_vec
+    do i = 1, n_sh
+      xy_bar(1, i) = xy(1, i) / (bf / 2.)
+      xy_bar(2, i) = xy(2, i) / (d / 2.)
     end do
-    wvec = solve_weights(neqn, 3*n_sh, amat, matmul(amat, one_vec))
-    wvec = wvec - one_vec
-    do ii = 1, 3*n_sh
-      fvec(ii) = fvec(ii) * wvec(ii)
+end function
+
+! ******************************************************************** !
+
+  pure function compute_section_props(n_sh, xy_bar, da) result(sp)
+    ! Returns the area and normalized moments of inertia that are needed for the section stiffness.
+    implicit none
+    integer, intent(in) ::  n_sh
+    real(8), intent(in) ::  xy_bar(2, n_sh), da(n_sh)
+    real(8)             ::  sp(4)
+    integer             ::  i
+    ! Function start
+    sp = 0.d0
+    do i = 1, n_sh
+      sp(1) = sp(1) + da(i)
+      sp(2) = sp(2) + xy_bar(2, i)**2 * da(i)
+      sp(3) = sp(3) + xy_bar(1, i)**2 * da(i)
+      sp(4) = sp(4) + xy_bar(1, i)**2 * xy_bar(2, i)**2 * da(i)
     end do
   end function
+
+! ******************************************************************** !
+
+  pure function section_tangent(n_sh, xy_bar, da, etang, section_props) result(ksec)
+    ! Returns the section tangent stiffness matrix.
+    ! @input n_sh: Number of shell elements.
+    ! @input xy_bar: Normlized node reference x,y-cooridinates.
+    ! @input da: Node tributary areas.
+    ! @input etang: Tangent modulus for each node.
+    ! @input section_props: Normalized [A,Ix,Iy,Iw].
+    ! @returns: Assembled tangent stiffness matrix.
+    !
+    ! Notes:
+    !   - Based on (6.22) on pg. 277 from Chen and Atsuta 1977.
+    implicit none
+    integer, intent(in) ::  n_sh
+    real(8), intent(in) ::  xy_bar(2, n_sh), da(n_sh), etang(n_sh), section_props(4)
+    real(8)             ::  ksec(4, 4), ks(4, 4)
+    real(8)             ::  x, y, a_bar, ix_bar, iy_bar, iw_bar
+    integer             ::  i
+    ! Function start
+    a_bar = section_props(1)
+    ix_bar = section_props(2)
+    iy_bar = section_props(3)
+    iw_bar = section_props(4)
+    ksec = 0.d0
+    do i = 1, n_sh
+      x = xy_bar(1, i)
+      y = xy_bar(2, i)
+      ! Column 1
+      ks(1, 1) = etang(i) * da(i) / a_bar
+      ks(2, 1) = etang(i) * y * da(i) / ix_bar
+      ks(3, 1) = etang(i) * -x * da(i) / iy_bar
+      ks(4, 1) = etang(i) * x * y * da(i) / iw_bar
+      ! Column 2
+      ks(1, 2) = etang(i) * y * da(i) / a_bar
+      ks(2, 2) = etang(i) * y**2 * da(i) / ix_bar
+      ks(3, 2) = etang(i) * -x * y * da(i) / iy_bar
+      ks(4, 2) = etang(i) * x * y**2 * da(i) / iw_bar
+      ! Column 3
+      ks(1, 3) = etang(i) * -x * da(i) / a_bar
+      ks(2, 3) = etang(i) * -x * y * da(i) / ix_bar
+      ks(3, 3) = etang(i) * x**2 * da(i) / iy_bar
+      ks(4, 3) = etang(i) * -x**2 * y * da(i) / iw_bar
+      ! Column 4
+      ks(1, 4) = etang(i) * x * y * da(i) / a_bar
+      ks(2, 4) = etang(i) * x * y**2 * da(i) / ix_bar
+      ks(3, 4) = etang(i) * -x**2 * y * da(i) / iy_bar
+      ks(4, 4) = etang(i) * x**2 * y**2 * da(i) / iw_bar
+      ksec = ksec + ks
+    end do
+  end function
+  
+! ******************************************************************** !
+
+  pure function calc_section_deform(ksec, sec_props, d, bf) result(usec)
+    ! Returns the generalized section deformations for unit loads in each DOF.
+    ! @input ksec: Normalized section stiffness matrix.
+    ! @returns: Section deformations, column i contains the defomations due to a force in DOF i.
+    ! 
+    ! Notes:
+    !   - Deformations: [centroid axial strain, strong axis curvature, weak axis curvature, torsion warping curvature]
+    implicit none
+    real(8), intent(in) ::  ksec(4, 4), sec_props(4), d, bf
+    real(8)             ::  usec(4, 4)
+    real(8)             ::  kinv(4, 4), f(4), normalization_factor(4)
+    integer             ::  i
+    ! Function start
+    normalization_factor(1) = sec_props(1)
+    normalization_factor(2) = sec_props(2) / (d / 2.d0)
+    normalization_factor(3) = sec_props(3) / (bf / 2.d0)
+    normalization_factor(4) = sec_props(4) / (d * bf / 4.d0)
+    kinv = matinv4(ksec)
+    do i = 1, 4
+      f = 0.d0
+      f(i) = 1.d0 /  normalization_factor(i)
+      usec(1:4, i) = matmul(kinv, f)
+    end do
+  end function
+  
+! ******************************************************************** !
+
+  pure function nodal_forces(n_sh, xy_bar, da, etang, usec) result(f_nodes)
+    ! Returns the axial force at each node for the deformation in each DOF.
+    ! @input n_sh: Number of shell elements.
+    ! @input xy_bar: Normlized node reference x,y-cooridinates.
+    ! @input da: Node tributary areas.
+    ! @input etang: Tangent modulus for each node.
+    ! @input usec: Section deformations, column i contains the defomations due to a force in DOF i.
+    ! @returns: Nodal forces, column j is for node j, row i is for DOF i.
+    implicit none
+    integer, intent(in) ::  n_sh
+    real(8), intent(in) ::  xy_bar(2, n_sh), da(n_sh), etang(n_sh), usec(4, 4)
+    real(8)             ::  f_nodes(4, n_sh)
+    integer             ::  i, j
+    real(8)             ::  eda, x, y
+    ! Function start
+    do j = 1, n_sh
+      x = xy_bar(1, j)
+      y = xy_bar(2, j)
+      eda = da(j) * etang(j)
+      do i = 1, 4
+        f_nodes(i, j) = eda * (usec(1, i) + y*usec(2, i) - x*usec(3, i) + x*y*usec(4, i))
+      end do
+    end do
+  end function
+
+! ******************************************************************** !
+  ! pure function plastic_centroid(n_sh, xyz, etang, ak) result(xyz_bar)
+  !   ! Returns the plastic centroid of the cross-section.
+  !   ! @input n_sh: Number of shell elements.
+  !   ! @input xyz: Reference coordinates of the nodes
+  !   ! @input etang: Tangnet modulus for each node
+  !   ! @input ak: Nodal areas.
+  !   ! @returns: Coordinates of plastic centroid
+  !   implicit none
+  !   integer, intent(in) ::  n_sh
+  !   real(8), intent(in) ::  xyz(3, n_sh), etang(n_sh), ak(n_sh)
+  !   real(8)             ::  xyz_bar(3), xyz_tot
+  !   integer             ::  ii
+  !   ! Function start
+  !   xyz_bar = 0.d0
+  !   do ii = 1, n_sh
+  !     xyz_bar = etang(ii) * xyz(1:3, ii)
+  !     xyz_tot = xyz_tot + etang(ii) * ak(ii)
+  !   end do
+  !   xyz_bar = xyz_bar / xyz_tot
+  ! end function
+! ******************************************************************** !
+  ! pure function pl_rot_weights(n_sh, xyz, area, tmod, xyz_bar) result(rw)
+  !   ! Returns the weights for applied moments.
+  !   ! @input n_sh: Number of shell nodes on the interface
+  !   ! @input xyz: Coords of shell nodes in reference config
+  !   ! @input area: Tributary area of each shell node
+  !   ! @input tmod: Tangent modulus associated with each node
+  !   ! @returns: Mx, My, Mz weights
+  !   implicit none
+  !   integer, intent(in) ::  n_sh
+  !   real(8), intent(in) ::  xyz(3, n_sh), area(n_sh), tmod(n_sh)
+  !   integer             ::  ii
+  !   real(8)             ::  rw(4, n_sh)
+  !   real(8)             ::  mx(n_sh), my(n_sh), mz(2, n_sh), mxtot, mytot, mztot
+  !   do ii = 1, n_sh
+  !     mx(ii) = xyz(2, ii) * area(ii) * tmod(ii)
+  !     mxtot = mxtot + mx(ii) * xyz(2, ii)
+  !     my(ii) = -xyz(1, ii) * area(ii) * tmod(ii)
+  !     mytot = mytot + my(ii) * xyz(1, ii)
+  !     mz(1:2, ii) = [-xyz(2, ii), xyz(1, ii)] * area(ii) * tmod(ii)
+  !     mztot = mztot + area(ii) * tmod(ii) * norm2(xyz(1:2, ii))**2
+  !   end do
+  !   rw(1, :) = mx / mxtot
+  !   rw(2, :) = my / abs(mytot)
+  !   rw(3:4, :) = mz / mztot
+  ! end function
 
 ! ******************************************************************** !
 
@@ -1191,7 +1264,7 @@ module mpc_modules
       nelem = 0.
       do jj = 1, 3
         if (elem_indexs(jj) /= 0) then
-          ! Average over the sections
+          ! Average over the sections (assumes 5 sections)
           tm_temp = 0.d0
           do kk = 1, 5
             tm_temp = tm_temp + tmod_arr(5*elem_indexs(jj) - 5 + kk)
@@ -1209,62 +1282,34 @@ module mpc_modules
 
 ! ******************************************************************** !
 
-  function weights_def_config(n_sh, u_shell, uc, weights_ref, xdef, xc, normal_vec, psi) result(weights_def)
-    ! Returns the weights that are in equilibrium in the deformed configuation.
-    ! @param n_sh: Number of shell nodes on interface.
-    ! @param u_shell: Displacement of the shell nodes
-    ! @param uc: Centroid displacement.
-    ! @param weights_ref: Weights in the reference configuration.
-    ! @param xdef: Shell nodes in the deformed configuration.
-    ! @param xc: Position of the centroid in the deformed configuration.
-    ! @param normal_vec: Unit vector normal to the cross-section interface in the deformed config.
-    ! @param psi: Warping fuction for each node.
-    ! @return: Weights adjusted for equilbirium in the deformed configuration.
+  pure function matinv4(A) result(B)
+    !! Performs a direct calculation of the inverse of a 4×4 matrix.
+    ! Adapted from http://fortranwiki.org/fortran/show/Matrix+inversion
     implicit none
-    ! Input and output
-    integer, intent(in) ::  n_sh
-    real(8), intent(in) ::  u_shell(3, n_sh), uc(3), weights_ref(3 * n_sh, 3), xdef(3, n_sh), xc(3), normal_vec(3), psi(n_sh)
-    real(8)             ::  weights_def(3 * n_sh, 3)
-    ! Internal
-    integer             ::  neqn
-    parameter(neqn=8)
-    ! parameter(neqn=7)
-    real(8)             ::  b_target(neqn), one_vec(3 * n_sh), b(neqn), equil_mat(neqn, 3 * n_sh), &
-                            weight_adjustment(3 * n_sh), diag_mat(3, 3)
-    integer             ::  i, j
-    ! Function definition
-    diag_mat = 0.d0
-    one_vec = 1.d0
-    equil_mat = 0.d0
-    do i = 1, 3
-      do j = 1, n_sh
-          ! Force equilibrium conditions
-          equil_mat(1, 3*j-2) = weights_ref(3*j-2, i)
-          equil_mat(2, 3*j-1) = weights_ref(3*j-1, i)
-          equil_mat(3, 3*j)   = weights_ref(3*j,   i)
-          ! Moment equilibrium conditions
-          diag_mat(1, 1) = weights_ref(3*j-2, i)
-          diag_mat(2, 2) = weights_ref(3*j-1, i)
-          diag_mat(3, 3) = weights_ref(3*j,   i)
-          equil_mat(4:6, 3*j-2:3*j) = matmul(-skew_sym(xdef(1:3, j) - xc), diag_mat)
-          ! Bimoment equilibrium
-          equil_mat(7, 3*j-2:3*j) = psi(j) * dot_product(normal_vec, weights_ref(3*j-2:3*j, i)) * normal_vec
-          ! Centroid displacement consitency
-          equil_mat(8, 3*j-2:3*j) = weights_ref(3*j-2:3*j, i) * u_shell(1:3, j)
-      end do
-      b_target = 0.d0
-      b_target(i) = 1.d0
-      b_target(8) = uc(i)
-      b = b_target - matmul(equil_mat, one_vec)
-      
-      weight_adjustment = one_vec + solve_weights(neqn, 3 * n_sh, equil_mat, b)
-      print *, 'weight adj. norm, i = ', i, norm2(weight_adjustment)
-      do j = 1, n_sh
-          weights_def(3*j-2, i) = weights_ref(3*j-2, i) * weight_adjustment(3*j-2)
-          weights_def(3*j-1, i) = weights_ref(3*j-1, i) * weight_adjustment(3*j-1)
-          weights_def(3*j  , i) = weights_ref(3*j,   i) * weight_adjustment(3*j)
-      end do
-    end do
+    real(8), intent(in) :: A(4,4)   !! Matrix
+    real(8)             :: B(4,4)   !! Inverse matrix
+    real(8)             :: detinv
+
+    ! Calculate the inverse determinant of the matrix
+    detinv = 1.d0 / (A(1,1)*(A(2,2)*(A(3,3)*A(4,4)-A(3,4)*A(4,3))+A(2,3)*(A(3,4)*A(4,2)-A(3,2)*A(4,4))+A(2,4)*(A(3,2)*A(4,3)-A(3,3)*A(4,2))) - A(1,2)*(A(2,1)*(A(3,3)*A(4,4)-A(3,4)*A(4,3))+A(2,3)*(A(3,4)*A(4,1)-A(3,1)*A(4,4))+A(2,4)*(A(3,1)*A(4,3)-A(3,3)*A(4,1))) + A(1,3)*(A(2,1)*(A(3,2)*A(4,4)-A(3,4)*A(4,2))+A(2,2)*(A(3,4)*A(4,1)-A(3,1)*A(4,4))+A(2,4)*(A(3,1)*A(4,2)-A(3,2)*A(4,1))) - A(1,4)*(A(2,1)*(A(3,2)*A(4,3)-A(3,3)*A(4,2))+A(2,2)*(A(3,3)*A(4,1)-A(3,1)*A(4,3))+A(2,3)*(A(3,1)*A(4,2)-A(3,2)*A(4,1))))
+
+    ! Calculate the inverse of the matrix
+    B(1,1) = detinv*(A(2,2)*(A(3,3)*A(4,4)-A(3,4)*A(4,3))+A(2,3)*(A(3,4)*A(4,2)-A(3,2)*A(4,4))+A(2,4)*(A(3,2)*A(4,3)-A(3,3)*A(4,2)))
+    B(2,1) = detinv*(A(2,1)*(A(3,4)*A(4,3)-A(3,3)*A(4,4))+A(2,3)*(A(3,1)*A(4,4)-A(3,4)*A(4,1))+A(2,4)*(A(3,3)*A(4,1)-A(3,1)*A(4,3)))
+    B(3,1) = detinv*(A(2,1)*(A(3,2)*A(4,4)-A(3,4)*A(4,2))+A(2,2)*(A(3,4)*A(4,1)-A(3,1)*A(4,4))+A(2,4)*(A(3,1)*A(4,2)-A(3,2)*A(4,1)))
+    B(4,1) = detinv*(A(2,1)*(A(3,3)*A(4,2)-A(3,2)*A(4,3))+A(2,2)*(A(3,1)*A(4,3)-A(3,3)*A(4,1))+A(2,3)*(A(3,2)*A(4,1)-A(3,1)*A(4,2)))
+    B(1,2) = detinv*(A(1,2)*(A(3,4)*A(4,3)-A(3,3)*A(4,4))+A(1,3)*(A(3,2)*A(4,4)-A(3,4)*A(4,2))+A(1,4)*(A(3,3)*A(4,2)-A(3,2)*A(4,3)))
+    B(2,2) = detinv*(A(1,1)*(A(3,3)*A(4,4)-A(3,4)*A(4,3))+A(1,3)*(A(3,4)*A(4,1)-A(3,1)*A(4,4))+A(1,4)*(A(3,1)*A(4,3)-A(3,3)*A(4,1)))
+    B(3,2) = detinv*(A(1,1)*(A(3,4)*A(4,2)-A(3,2)*A(4,4))+A(1,2)*(A(3,1)*A(4,4)-A(3,4)*A(4,1))+A(1,4)*(A(3,2)*A(4,1)-A(3,1)*A(4,2)))
+    B(4,2) = detinv*(A(1,1)*(A(3,2)*A(4,3)-A(3,3)*A(4,2))+A(1,2)*(A(3,3)*A(4,1)-A(3,1)*A(4,3))+A(1,3)*(A(3,1)*A(4,2)-A(3,2)*A(4,1)))
+    B(1,3) = detinv*(A(1,2)*(A(2,3)*A(4,4)-A(2,4)*A(4,3))+A(1,3)*(A(2,4)*A(4,2)-A(2,2)*A(4,4))+A(1,4)*(A(2,2)*A(4,3)-A(2,3)*A(4,2)))
+    B(2,3) = detinv*(A(1,1)*(A(2,4)*A(4,3)-A(2,3)*A(4,4))+A(1,3)*(A(2,1)*A(4,4)-A(2,4)*A(4,1))+A(1,4)*(A(2,3)*A(4,1)-A(2,1)*A(4,3)))
+    B(3,3) = detinv*(A(1,1)*(A(2,2)*A(4,4)-A(2,4)*A(4,2))+A(1,2)*(A(2,4)*A(4,1)-A(2,1)*A(4,4))+A(1,4)*(A(2,1)*A(4,2)-A(2,2)*A(4,1)))
+    B(4,3) = detinv*(A(1,1)*(A(2,3)*A(4,2)-A(2,2)*A(4,3))+A(1,2)*(A(2,1)*A(4,3)-A(2,3)*A(4,1))+A(1,3)*(A(2,2)*A(4,1)-A(2,1)*A(4,2)))
+    B(1,4) = detinv*(A(1,2)*(A(2,4)*A(3,3)-A(2,3)*A(3,4))+A(1,3)*(A(2,2)*A(3,4)-A(2,4)*A(3,2))+A(1,4)*(A(2,3)*A(3,2)-A(2,2)*A(3,3)))
+    B(2,4) = detinv*(A(1,1)*(A(2,3)*A(3,4)-A(2,4)*A(3,3))+A(1,3)*(A(2,4)*A(3,1)-A(2,1)*A(3,4))+A(1,4)*(A(2,1)*A(3,3)-A(2,3)*A(3,1)))
+    B(3,4) = detinv*(A(1,1)*(A(2,4)*A(3,2)-A(2,2)*A(3,4))+A(1,2)*(A(2,1)*A(3,4)-A(2,4)*A(3,1))+A(1,4)*(A(2,2)*A(3,1)-A(2,1)*A(3,2)))
+    B(4,4) = detinv*(A(1,1)*(A(2,2)*A(3,3)-A(2,3)*A(3,2))+A(1,2)*(A(2,3)*A(3,1)-A(2,1)*A(3,3))+A(1,3)*(A(2,1)*A(3,2)-A(2,2)*A(3,1)))
   end function
 
 ! ******************************************************************** !
