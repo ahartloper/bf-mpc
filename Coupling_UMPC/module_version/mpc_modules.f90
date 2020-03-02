@@ -627,24 +627,24 @@ module mpc_modules
     rr0 = matmul(r, r0)
     rr0_T = transpose(rr0)
     do ii = 1, n_sh
-      ! Weak axis force due to weak axis displacement
+      ! Weak axis nodal force due to weak axis shear force
       w_bar = 0.d0
       w_bar(1, 3) = w_all(3, ii)
       w_bar(3, 1) = w_all(3, ii)
       s_bar(:, 1) = matmul(w_bar, t_bar)
-      ! Weak axis force in flange due to strong axis displacement
+      ! Weak axis nodal force in flange due to strong axis shear force
       w_bar = 0.d0
       w_bar(3, 1) = w_all(4, ii)
       w_bar(1, 3) = w_all(4, ii)
-      ! Strong axis force due to strong axis displacement
+      ! Strong axis nodal force due to strong axis shear force
       w_bar(3, 2) = w_all(2, ii)
       w_bar(2, 3) = w_all(2, ii)
       s_bar(:, 2) = matmul(w_bar, t_bar)
-      ! Axial force due to axial displacement
+      ! Axialnodal force due to axial force
       w_bar = 0.d0
       w_bar(3, 3) = w_all(1, ii) / a_total
       s_bar(:, 3) = matmul(w_bar, t_bar)
-      ! Rotate the weights from the reference to the deformed config
+      ! Rotate the nodal forces from the reference to the deformed config
       s = matmul(rr0, matmul(s_bar, rr0_T))
       u_lin(1:3, 3*ii-2:3*ii) = transpose(s)
     end do
@@ -652,61 +652,32 @@ module mpc_modules
 
 ! ******************************************************************** !
 
-  function torquer(n_sh, p_ref, rr, we, hcl) result(tq)
+  function torquer(n_sh, p_ref, areas, d_cl) result(tq)
     ! Returns torque on flange only
-    ! @ input 
-    ! @ returns: 
+    ! @input n_sh: Number of shell nodes on the interface
+    ! @input xyz: Coords of shell nodes in reference config.
+    ! @input areas: Node areas.
+    ! @input d_cl: Section centerline depth.
+    ! @returns: Nodal forces due to a unit torque on the cross-section.
     ! Input and output
     implicit none
     integer, intent(in) ::  n_sh
-    real(8), intent(in) ::  p_ref(3, n_sh), rr(3, 3), we(n_sh), hcl
-    real(8)             ::  tq(3, n_sh)
+    real(8), intent(in) ::  p_ref(3, n_sh), areas(n_sh), d_cl
+    real(8)             ::  tq(2, n_sh)
     real(8)             ::  tor, ff
     integer             ::  ii
-    ! Function
-    
-    ! todo: needs the initial config, r0, then apply r . r0 . tq
-    
+    ! Function    
     tor = 0.
     tq = 0.d0
     do ii = 1, n_sh
-      if (abs(p_ref(2, ii)) >= hcl / 2.d0) then
+      if (abs(p_ref(2, ii)) >= d_cl / 2.d0) then
         ! todo: fix this hack (the 150 and 0.5 factor) - concentrates force at the center nodes
         ff = 1.d0 - 0.9 * abs(p_ref(1, ii)) / 150.
-        tq(1:2, ii) = ff * we(ii) * [ -p_ref(2, ii), p_ref(1, ii) ]
-        tq(1:3, ii) = matmul(rr, tq(1:3, ii))
-        tor = tor + ff * we(ii) * norm2(p_ref(1:2, ii)) ** 2
+        tq(1:2, ii) = ff * areas(ii) * [ -p_ref(2, ii), p_ref(1, ii) ]
+        tor = tor + ff * areas(ii) * norm2(p_ref(1:2, ii)) ** 2
       end if
     end do
     tq = tq / tor
-  end function
-
-! ******************************************************************** !
-
-  pure function rot_weights(n_sh, xyz, area, tmod) result(rw)
-    ! Returns the weights for applied moments.
-    ! @input n_sh: Number of shell nodes on the interface
-    ! @input xyz: Coords of shell nodes in reference config
-    ! @input area: Tributary area of each shell node
-    ! @input tmod: Tangent modulus associated with each node
-    ! @returns: Mx,My,Mz weights
-    implicit none
-    integer, intent(in) ::  n_sh
-    real(8), intent(in) ::  xyz(3, n_sh), area(n_sh), tmod(n_sh)
-    integer             ::  ii
-    real(8)             ::  rw(4, n_sh)
-    real(8)             ::  mx(n_sh), my(n_sh), mz(2, n_sh), mxtot, mytot, mztot
-    do ii = 1, n_sh
-      mx(ii) = xyz(2, ii) * area(ii) * tmod(ii)
-      mxtot = mxtot + mx(ii) * xyz(2, ii)
-      my(ii) = -xyz(1, ii) * area(ii) * tmod(ii)
-      mytot = mytot + my(ii) * xyz(1, ii)
-      mz(1:2, ii) = [-xyz(2, ii), xyz(1, ii)] * area(ii) * tmod(ii)
-      mztot = mztot + area(ii) * tmod(ii) * norm2(xyz(1:2, ii))**2
-    end do
-    rw(1, :) = mx / mxtot
-    rw(2, :) = my / abs(mytot)
-    rw(3:4, :) = mz / mztot
   end function
 
 ! ******************************************************************** !
@@ -760,6 +731,11 @@ module mpc_modules
 
   pure function normalized_coords(n_sh, xy, d, bf) result(xy_bar)
     ! Returns the normalized x,y-coordinates of all the nodes.
+    ! @input n_sh: Number of shell elements.
+    ! @input xy_bar: Node reference x,y-cooridinates
+    ! @input d: Section depth.
+    ! @input bf: Web width.
+    ! @returns: Normlized node reference x,y-cooridinates.
     implicit none
     integer, intent(in) ::  n_sh
     real(8), intent(in) ::  xy(2, n_sh), d, bf
@@ -909,6 +885,12 @@ end function
 
   pure function compute_node_areas(n_sh, xyz, sec_props, classification, mesh_sizes) result(areas)
     ! Returns the area for each node.
+    ! @input n_sh: Number of shell elements.
+    ! @input xyz: Node coordinates in reference config.
+    ! @input sec_props: Cross-section dimensions.
+    ! @input classification: Node classification tags.
+    ! @input: Mesh sizes for the flange and web, [delta_f, delta_w].
+    ! @returns: Tributary area for each node.
     implicit none
     integer, intent(in) ::  n_sh, classification(n_sh)
     real(8), intent(in) ::  xyz(3, n_sh), sec_props(4), mesh_sizes(2)
@@ -940,8 +922,11 @@ end function
 
   pure function compute_mesh_size(n_sh, p, sec_props, classification) result(mesh_sizes)
     implicit none
-    ! Returns the area for each node.
-    ! @input p: Nodes in reference config.
+    ! Returns the mesh size for the flange and web on the interface.
+    ! @input n_sh: Number of shell elements.
+    ! @input p: Node coordinates in reference config.
+    ! @input sec_props: Cross-section dimensions.
+    ! @input classification: Node classification tags.
     ! @returns: Mesh sizes for the flange and web, [delta_f, delta_w].
     integer, intent(in) ::  n_sh, classification(n_sh)
     real(8), intent(in) ::  p(3, n_sh), sec_props(4)
