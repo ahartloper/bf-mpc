@@ -41,7 +41,7 @@ C
       ! Loop counters
       integer               :: i, i_sh
       ! Nodal weight factors
-      real(8)               :: total_weight, w_ish
+      real(8)               :: total_area, a_node
       ! Warping amplitude
       real(8)               :: w_amp
       ! Centroids (deformed and initial)
@@ -55,18 +55,26 @@ C
      1                         q_mat(:, :), x_shell_def(:, :),
      2                         x_shell(:, :), u_shell(:, :), 
      3                         w_lin(:), psi_all(:), weights(:, :),
-     4                         x_shell_ref(:, :)
+     4                         x_shell_ref(:, :), q_mat2(:, :)
       ! For the rotation quaternion and computations
-      real(8)               :: b_mat(quatdim, quatdim), 
-     1                         beta(quatdim, quatdim)
+      real(8)               ::  b_mat(quatdim, quatdim), 
+     1                          beta(quatdim, quatdim), 
+     2                          beta_T(quatdim, quatdim)
       real(8)               :: op_quat(quatdim)
       real(8)               :: lambda
       real(8)               :: lam_q(quatdim+1)
       ! Linearized displacment
-      real(8), allocatable  ::  disp_lin(:, :)
+      integer               ::  k_inner, n_inner
+      real(8)               ::  tol_inner, uc_prev(3)
+      real(8), allocatable  ::  disp_lin(:, :), bend_tang(:, :),
+     1                          my_torque(:, :), rotw(:, :), tmod(:)
+      real(8)               ::  temp33(3, 3), tmod_total
+      ! Defines the max number of inner iterations to do and the tolerance
+      parameter                 (n_inner=10, tol_inner=1.d-8)
       ! Numerical parameters
       real(8)               :: one, two, zero
       parameter                (one=1.0d0, two=2.0d0, zero=0.d0)
+      integer               ::  interf_id, inelastic_interface
       ! Allocate variable size arrays
       n_shell = n - 1
       allocate(x_shell(ndim, n_shell))
@@ -81,91 +89,151 @@ C
       allocate(w_lin(ndim * n_shell))
       allocate(weights(4, n_shell))
       allocate(disp_lin(ndim, ndim * n_shell))
+      allocate(bend_tang(ndim, n_shell))
+      allocate(my_torque(ndim, n_shell))
+      allocate(tmod(n_shell))
+      allocate(rotw(4, n_shell))
+      allocate(q_mat2(ndim, ndim * n_shell))
 C ******************************************************************** C
 C Subroutine definition
 C ******************************************************************** C
+      ! Parameter to select if using inelastic interface
+      ! if inelastic_interface == 1, use computed tangent modulus
+      ! if inelastic_interface /= 1, use constant tangent modulus
+      inelastic_interface = 1
+      
       ! Calculate the centroid locations
       ! The first node is the beam node, the shell nodes follow
       x_shell = x(1:3, 2:n)
       u_shell = u(1:3, 2:n)
       x_shell_def = x_shell + u_shell
       xc0(:) = zero
-      xc(:) = zero
       do i = 1, n_shell
         xc0(:) = xc0(:) + x_shell(:, i)
-        xc(:) = xc(:) + x_shell_def(:, i)
       end do
       n_reciprocal = one / n_shell
       xc0 = xc0 * n_reciprocal
-      xc = xc * n_reciprocal
-      u_cent = xc - xc0
       
       ! Find the reference orientation
       do i = 1, n_shell
         c_mat(:, i) = x_shell(:, i) - xc0
-        d_mat(:, i) = x_shell_def(:, i) - xc
       end do
       r_ref = ini_config(c_mat, n_shell)
       
+      ! Get the tangent modulus for each node
+      ! todo: need to find someway of getting the beam ID in here
+      if (x(3,1) < 2000) then
+        interf_id = 2245
+      else
+        interf_id = 2247
+      end if
+      if (inelastic_interface == 1) then
+        tmod = form_tmod_vec(n_shell, interf_id)
+      else
+        tmod = 1.d0
+      end if
+      
       ! Calculate the nodal weights for displacement linearization
-      ! The centroid does not depend on the weights due to symmetry so
-      ! it's valid to calculate the centroid first.
-      ! The first n_shell values are the area weights, the rest are 
-      ! shear weights.
       ! todo: pass x_shell_ref where needed
       x_shell_ref = matmul(transpose(r_ref), c_mat)
-      weights = calc_weights(x_shell_ref, n_shell, jtype)
-      total_weight = zero
+      ! todo: need to get all the tf, tw, h, bf, in the main
+      weights = calc_weights(x_shell_ref, n_shell, jtype, tmod)
+      total_area = zero
       do i = 1, n_shell
-        total_weight = total_weight + weights(1, i)
+        total_area = total_area + weights(1, i)
       end do      
       
-      ! Compute the optimal rotation quaternion
-      b_mat(:, :) = zero
+      ! Initialize the linearization to the arithmetic mean
+      temp33 = zero
+      temp33(1, 1) = n_reciprocal
+      temp33(2, 2) = n_reciprocal
+      temp33(3, 3) = n_reciprocal
       do i = 1, n_shell
-        beta = left_quat(zero,d_mat(:, i))- right_quat(zero,c_mat(:, i))
-        b_mat = b_mat + weights(1, i) / total_weight 
-     1          * matmul(transpose(beta), beta)
+        disp_lin(1:3, 3*i-2:3*i) = temp33
       end do
-      lam_q = calc_opquat(b_mat)
-      lambda = lam_q(1)
-      op_quat = lam_q(2:5)
-      ! Make the first entry always positive
-      op_quat = sign(one, op_quat(1)) * op_quat  
-      
+      ! Iterate until convergence using the displacement linearization 
+      ! for the centroid
+      u_cent(1:3) = zero
+      do k_inner = 1, n_inner
+        uc_prev = u_cent
+        u_cent(1:3) = zero
+        do i = 1, n_shell
+          temp33 = disp_lin(1:3, 3*i-2:3*i)
+          u_cent(1:3) = u_cent(1:3) + matmul(temp33, u_shell(1:3, i))
+        end do
+        xc = xc0 + u_cent
+        do i = 1, n_shell
+          d_mat(:, i) = x_shell_def(:, i) - xc
+        end do
+
+        ! Compute the optimal rotation quaternion
+        b_mat(:, :) = zero
+        do i = 1, n_shell
+          beta=left_quat(zero,d_mat(:,i))-right_quat(zero,c_mat(:,i))
+          beta_T = transpose(beta)
+          b_mat = b_mat+weights(1,i)/total_area*matmul(beta_T,beta)
+        end do
+        lam_q = calc_opquat(b_mat)
+        lambda = lam_q(1)
+        op_quat = lam_q(2:5)
+        ! Make the first entry always positive
+        op_quat = sign(one, op_quat(1)) * op_quat  
+        r_mat = rot_mat(op_quat)
+        
+        ! Compute the linearized centroid displacement
+        disp_lin=calc_disp_lin(n_shell,weights,total_area,r_ref,r_mat)
+        
+        ! Check for convergene of the inner iterations
+        if (norm2(u_cent-uc_prev)/(norm2(uc_prev)+1.d-9)<tol_inner) then
+          exit
+        end if
+      end do  ! over k_inner
+
       ! Compute the linearized rotation matrix
-      r_mat = rot_mat(op_quat)
       g_mat = calc_g(op_quat, n_shell, b_mat, c_mat, lambda, r_mat)
       q_mat = calc_q(op_quat, n_shell, g_mat)
       
       ! Compute the warping amplitude
       psi_all = warp_fun(c_mat, n_shell, r_ref)
       t_def = matmul(r_mat, r_ref(:, 3))
-      w_amp = warp_amp(x_shell, x_shell_def, u_cent, t_def, r_mat,
-     1                 psi_all)
+      w_amp = warp_amp(x_shell,x_shell_def,u_cent,t_def,r_mat,psi_all)
      
-      ! Compute the linearized warping
-      w_lin = calc_lin_w(c_mat, n_shell, psi_all, r_ref, r_mat, 
+      ! Compute the linearized warping 
+      w_lin =calc_lin_w(x_shell_ref,n_shell,r_ref(:,3),psi_all,r_mat,
      1                   weights(1, :))
       
       ! Compute the linearized centroid displacement
-      disp_lin = calc_disp_lin(n_shell, weights, total_weight, r_ref, 
-     1                         r_mat)
+      disp_lin=calc_disp_lin(n_shell,weights,total_area,r_ref,r_mat)
+     
       ! Assign the A submatrix for the beam node and set active DOF
       forall(i = 1:maxdof) a(i, i, 1) = one
       forall(i = 1:maxdof) jdof(i, 1) = i
       
+      bend_tang = tang_force_b(n_shell, x_shell_ref, r_ref, r_mat, 
+     1            25.0d0, 25.0d0, 28.d0, 14.5d0, 300.d0, 472.d0)
+      my_torque = torquer(n_shell, x_shell_ref, r_mat, weights(1, :), 
+     1            472.d0)
+      
+      rotw = rot_weights(n_shell, x_shell_ref, weights(1, :), tmod)
+      q_mat2 = lin_rot(n_shell, r_ref, r_mat, rotw)
+     
       ! Assign the A submatrices for the shell nodes
       do i = 2, n
-        ! Index corresponding to the shell nodes
+        ! i_sh corresponds to the shell nodes since i starts at 2
         i_sh = i - 1
-        w_ish = weights(1, i_sh) / total_weight
+        a_node = weights(1, i_sh) / total_area
         ! Displacement constraints
         a(1:3, 1:3, i) = -disp_lin(1:3, 3*i_sh-2:3*i_sh)
         ! Rotation constraints
-        a(4, 1:3, i) = -q_mat(1, 3*i_sh-2:3*i_sh) * w_ish
-        a(5, 1:3, i) = -q_mat(2, 3*i_sh-2:3*i_sh) * w_ish
-        a(6, 1:3, i) = -q_mat(3, 3*i_sh-2:3*i_sh) * w_ish
+        q_mat(1:3, 3*i_sh-2:3*i_sh)=q_mat(1:3, 3*i_sh-2:3*i_sh)*a_node
+        !a(4:6, 1:3, i) = -q_mat(1:3, 3*i_sh-2:3*i_sh)
+        a(4:6, 1:3, i) = -q_mat2(1:3, 3*i_sh-2:3*i_sh)
+        
+        ! Address tangential due to bending moment
+        !a(4, 1:3, i) = a(4, 1:3, i) + bend_tang(1:3, i_sh)
+        ! Replace the torque
+        !a(6, 1:3, i) = my_torque(1:3, i_sh)
+        
         ! Warping constraint
         a(7, 1:3, i) = -w_lin(3*i_sh-2:3*i_sh)
         ! Set the active DOF (displacement) in the shell elements
@@ -555,54 +623,52 @@ C ******************************************************************** C
 C ******************************************************************** C
 C     Compute the linearized warping vector
 C ******************************************************************** C
+      ! todo: decide what form we want and clean this function up
       ! Returns the linearized warping vector.
-      ! @ input c: Location of nodes in initial config. relative to 
-      !            centroid, size 3xN
+      ! @ input x_def: pos. of nodes in deformed configuration, 3xN
       ! @ input n_sh: Number of shell nodes (N)
-      ! @ input psi: Warping function for all the nodes, size N
-      ! @ input r0: Rotation from referece to initial config., 3x3
-      ! @ input r: Rotation from initial to deformed config., 3x3
-      ! @ input n_area: Tributary area for each node, size N
-      ! @ returns: Linearization of warping amplitude w.r.t x, size 3Nx1
+      ! @ input t0: Orientation of the normal to the cross-section in  
+      !             the reference configuration
+      ! @ input psi: Warping function for all the nodes
+      ! @ input r: Rotation from initial to deformed configuration
+      ! @ input g: Instantaneous rotation matrix, size 3x3N
+      ! @ input we: Area weight value for each node, size N
+      ! @ returns w_lin: Linearization of warping amplitude w.r.t x
       !
       ! Notes:
       !   - we containts the area weights for each node, then the shear
       !   weights for each node, only use the first set
-      pure function calc_lin_w(c, n_sh, psi, r0, r, n_area)
-     1              result(w_linear)
+      pure function calc_lin_w(c2, n_sh, t0, psi, r, we) 
+     1              result(w_lin)
       ! Input and output
       integer, intent(in)   ::  n_sh
-      real(8), intent(in)   ::  c(3, n_sh), psi(n_sh), r0(3,3), r(3, 3)
-      real(8), intent(in)   ::  n_area(n_sh)
-      real(8)               ::  w_linear(3*n_sh)
+      real(8), intent(in)   ::  c2(3, n_sh), t0(3), psi(n_sh),r(3, 3)
+      real(8), intent(in)   ::  we(n_sh)
+      real(8)               ::  w_lin(3*n_sh)
       ! Internal
-      integer               ::  ii
-      real(8)               ::  bimom, w_warp(3, 3), c2(3, n_sh), d_cl
-      real(8)               ::  t_bar(3), rtot_T(3, 3)
-      real(8)               ::  zero_tol
+      integer               ::  i, j, num_psi_non_zero
+      real(8)               ::  t(3), we_total
+      real(8)               ::  zero, one, two
+      parameter                 (zero = 0.d0, one = 1.d0, two = 2.d0)
+      real(8)               ::  zero_tol, d_cl
       parameter                 (zero_tol=1.d-6)
-      ! Rotate from the initial config to the reference config
-      c2 = matmul(transpose(r0), c)
       ! Assemble the linearized warping vector
-      w_linear = 0.d0
-      bimom = 0.d0
-      t_bar = matmul(r, r0(:, 3))
-      rtot_T = transpose(matmul(r, r0))
-      do ii = 1, n_sh
-        if (abs(psi(ii)) > zero_tol) then
+      t = matmul(r, t0)
+      w_lin = 0.d0
+      we_total = 0.d0
+      do i = 1, n_sh
+        if (abs(psi(i)) > zero_tol) then
           ! todo: bimom can be calculated in the function with psi
-          bimom = bimom + abs(c2(1, ii) * psi(ii) * n_area(ii))
-          ! Warping only causes axial stress (in 33 direction)
-          w_warp = 0.d0
-          w_warp(3, 3) = psi(ii) * n_area(ii)
-          w_linear(3*ii-2:3*ii) = psi(ii) * n_area(ii) * t_bar
+          we_total = we_total + abs(c2(1, i) * psi(i) * we(i))
+          w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) + t * psi(i) * we(i)
         end if
       end do
       ! Normalize by the total bimoment to satisfy equilibrium
       ! B = (M_f,t + M_f,b) * (d_cl / 2)
       d_cl = maxval(c2(2, :))
-      bimom = bimom * d_cl
-      w_linear = w_linear / bimom
+      we_total = we_total * d_cl
+      w_lin = w_lin / we_total      
+      
       end function
 C ******************************************************************** C
 C     Extract rotation vector from quaternion
@@ -636,6 +702,7 @@ C ******************************************************************** C
       ! @ input p: Shell nodes in the reference configuration, size 3xN
       ! @ input n_sh: Number of shell nodes (N)
       ! @ input tf_tw_code: Encoded flange and web thickness factors
+      ! @ input etang: Tangent modulus, size N
       ! @ returns w: Weight value for each node
       !   - Row 1: Area weight
       !   - Row 2: Normalized strong axis weight
@@ -649,10 +716,10 @@ C ******************************************************************** C
       !   - The weights are only valid if the interface is elastic
       !   - The flange and web mesh distances are assumed to be constant
       !     between nodes
-      pure function calc_weights(p, n_sh, tf_tw_code) result(ww)
+      function calc_weights(p, n_sh, tf_tw_code, etang) result(ww)
       ! Input and output
       integer, intent(in)   ::  n_sh
-      real(8), intent(in)   ::  p(3, n_sh)
+      real(8), intent(in)   ::  p(3, n_sh), etang(n_sh)
       integer, intent(in)   ::  tf_tw_code
       real(8)               ::  ww(4, n_sh)
       ! Internal variables
@@ -756,7 +823,7 @@ C ******************************************************************** C
       width = 2.d0 * x_max
       depth = 2.d0 * y_max + tf
       v_weights = shear_factors(p, n_sh, depth, width, tf, tw, 
-     1                          delta_f, delta_w, classification)
+     1                          delta_f, delta_w, classification, etang)
       ! Assign the area weights
       do ii = 1, n_sh
         c = classification(ii)
@@ -827,7 +894,11 @@ C ******************************************************************** C
         ! Direction assumes a positive shear force
         sgn = sign(1.d0, x1 * y1)
         ! Linear interpolation based on position along half flange
-        v = sgn * (bf - 2. * abs(x1)) * d_cl / 4.
+        if (abs(xi(1)) > bf / 2.) then
+          v = 0.
+        else
+          v = sgn * (bf - 2. * abs(x1)) * d_cl / 4.
+        end if
       end function
 C ******************************************************************** C
 C     Calculate the shear factor for web nodes (weak and strong)
@@ -852,7 +923,11 @@ C ******************************************************************** C
         x1 = xi(1)
         y1 = xi(2)
         ! Strong axis
-        v(1) = (2.*bf*(d+d1)*tf + tw*(d1**2-4.*y1**2)) / (8.*tw)
+        if (abs(xi(2)) > (d - tf) / 2.) then
+          v(1) = 0.
+        else 
+          v(1) = (2.*bf*(d+d1)*tf + tw*(d1**2-4.*y1**2)) / (8.*tw)
+        end if
         ! Weak axis
         ! Only valid for x1 = 0
         v(2) = (2.*bf**2*tf + (d-2.*tf)*tw**2) / (8.*d1)
@@ -868,16 +943,18 @@ C ******************************************************************** C
       ! @ input tf: Flange thickness
       ! @ input tw: Web thickness
       ! @ input c_tags: Node classification tag, size N
+      ! @ input etang: Tangent modulus, size N
       ! @ returns: The normalized shear resultants, size Nx3
       !   - Column 1: strong axis
       !   - Column 2: weak axis
       !   - Column 3: complementary force for strong axis
       pure function shear_factors(p, n_sh, d, bf, tf, tw, 
-     1                            delta_f, delta_w, c_tags) result(v)
+     1                            delta_f, delta_w, c_tags, etang)
+     2                            result(v)
       ! Input and output
       integer, intent(in) ::  n_sh, c_tags(n_sh)
       real(8), intent(in) ::  p(3, n_sh), d, bf, tf, tw, 
-     1                        delta_f, delta_w
+     1                        delta_f, delta_w, etang(n_sh)
       real(8)             ::  v(n_sh, 3)
       ! Internal variables
       real(8)             ::  d1, tau(2), total_strong, total_weak,
@@ -905,6 +982,8 @@ C ******************************************************************** C
         else if (c == flange_tag) then
           tau = tf * delta_f * shear_flange(p(:, ii), d, d1, bf, tf, tw)
           tau_2 = tf * delta_f * comp_shear_flange(p(:, ii), d_cl, bf)
+          
+          tau(1) = 0.d0
         else if (c == corner_tag) then
           ! Sample at one-half element distance towards the web
           p_corner(1) = -sign(1., p(1, ii)) * delta_f / 2.
@@ -912,12 +991,20 @@ C ******************************************************************** C
           p_corner = p(:, ii) + p_corner
           tau = tf*delta_f/2.* shear_flange(p_corner, d, d1, bf, tf, tw)
           tau_2 = tf * delta_f / 2.* comp_shear_flange(p_corner,d_cl,bf)
+          
+          tau(1) = 0.d0
         else
-          tau = tf * delta_f * shear_flange(p(:, ii), d, d1, bf, tf, tw)
+          tau=tf*delta_f*shear_flange(p(:, ii),d,d1,bf,tf,tw)
+          
+          tau(1) = 0.d0
+          
           tau = tau+tw*delta_w/2.*shear_web(p(:, ii), d, d1, bf, tf, tw)
           ! Complementary shear cancels from both sides at the joint
           tau_2 = 0.
         end if
+        ! Adjust for the tangent modulus
+        tau = tau * etang(ii)
+        ! Record the weights
         total_strong = total_strong + tau(1)
         total_weak = total_weak + tau(2)
         v(ii, 1:2) = tau
@@ -977,6 +1064,218 @@ C ******************************************************************** C
         s = matmul(rr0, matmul(s_bar, rr0_T))
         u_lin(:, 3*ii-2:3*ii) = transpose(s)
       end do
+      end function
+C ******************************************************************** C
+C     Correct tangential stress under bending
+C ******************************************************************** C
+      ! Returns the matrix of tangential forces for bending axial stress
+      ! @ input 
+      ! @ returns: 
+      pure function tang_force_b(n_sh, p, r0, r, df, dw, tf, tw,b,hcl) 
+     1              result(f_tang_b)
+      ! Input and output
+      integer, intent(in) ::  n_sh
+      real(8), intent(in) ::  p(3, n_sh), r0(3, 3), r(3, 3), df, dw, tf, 
+     1                        tw, b, hcl
+      real(8)             ::  f_tang_b(3, n_sh)
+      ! Internal variables
+      integer             ::  i
+      real(8)             ::  moi,nu,x_vec(3),y_vec(3),sf,zero_tol,y
+      parameter               (sf = 1.0d0, zero_tol = 0.1)
+      
+      ! Assume Poisson ratio = 0.3
+      nu = 0.3
+      ! moi is the moment of intertia
+      moi = 0.d0
+      x_vec = matmul(r, r0(:, 1))
+      y_vec = matmul(r, r0(:, 2))
+      f_tang_b = 0.d0
+      do i = 1, n_sh
+        ! web
+        y = p(2, i)
+        if (abs(p(1, i)) < zero_tol) then
+          if (abs(abs(p(2, i)) - hcl / 2.) < zero_tol) then
+            ! joint nodes
+         f_tang_b(2, i)=web_f_r(y+dw/2.,dw,hcl)-web_f_r(y-dw/2.,dw,hcl)
+            f_tang_b(2, i) = f_tang_b(2, i) * nu * tw * dw / 2.d0
+            moi = moi + p(2, i) ** 2 * tw * dw / 2.
+          else
+            ! inner nodes
+            if (abs(p(2, i)) < 0.1) then
+            ! center node (now nothing different from other nodes)
+         f_tang_b(2, i)=web_f_r(y+dw/2.,dw,hcl)-web_f_r(y-dw/2.,dw,hcl)
+            f_tang_b(2, i) = f_tang_b(2, i) * nu * tw * dw / 2.d0
+            else
+         f_tang_b(2, i)=web_f_r(y+dw/2.,dw,hcl)-web_f_r(y-dw/2.,dw,hcl)
+            f_tang_b(2, i) = f_tang_b(2, i) * nu * tw * dw / 2.d0
+            end if
+            moi = moi + p(2, i) ** 2 * tw * dw
+          end if
+          ! sf = scale factor to account for flexibility
+          f_tang_b(:, i) = f_tang_b(2, i) * y_vec * sf
+        end if
+        ! flange
+        if (abs(abs(p(2, i)) - hcl / 2.) < zero_tol) then
+          if (abs(abs(p(1, i)) - b / 2.) < zero_tol) then
+            ! edge node
+            moi = moi + p(2, i) ** 2 * tf * df / 2.
+          else
+            ! inner node
+            moi = moi + p(2, i) ** 2 * tf * df
+          end if
+        end if
+      end do
+      
+      ! Normalize to unit moment
+      f_tang_b = f_tang_b / moi
+      end function      
+C ******************************************************************** C
+      ! Returns restraint force
+      ! @ input 
+      ! @ returns: 
+      pure function web_f_r(y, dw, hcl) result(fdiff)
+      ! Input and output
+      real(8), intent(in) ::  y, dw, hcl
+      real(8)             ::  fdiff
+      real(8)             ::  alpha, beta
+      ! Function
+      alpha = 0.10
+      beta = 2.0
+      if (abs(y) <= hcl / 2.d0) then
+        fdiff = -y / (alpha * abs(y) / (hcl / 2.d0) + 1.d0 + beta)
+      else
+        fdiff = 0.d0
+      end if
+      end function
+C ******************************************************************** C
+      ! Returns torque on flange only
+      ! @ input 
+      ! @ returns: 
+      function torquer(n_sh, p_ref, rr, we, hcl) result(tq)
+      ! Input and output
+      integer, intent(in) ::  n_sh
+      real(8), intent(in) ::  p_ref(3, n_sh), rr(3, 3), we(n_sh), hcl
+      real(8)             ::  tq(3, n_sh)
+      real(8)             ::  tor, ff
+      integer             ::  ii
+      ! Function
+      
+      ! todo: needs the initial config, r0, then apply r . r0 . tq
+      
+      tor = 0.
+      tq = 0.d0
+      do ii = 1, n_sh
+        if (abs(p_ref(2, ii)) >= hcl / 2.d0) then
+          ! todo: fix this hack (the 150 and 0.5 factor) - concentrates force at the center nodes
+          ff = 1.d0 - 0.9 * abs(p_ref(1, ii)) / 150.
+          tq(1:2, ii) = ff * we(ii) * [ -p_ref(2, ii), p_ref(1, ii) ]
+          tq(1:3, ii) = matmul(rr, tq(1:3, ii))
+          tor = tor + ff * we(ii) * norm2(p_ref(1:2, ii)) ** 2
+        end if
+      end do
+      tq = -1.d0 * tq / tor
+      end function
+C ******************************************************************** C
+      pure function rot_weights(n_sh, xyz, area, tmod) result(rw)
+        ! Returns the weights for applied moments.
+        ! @input n_sh: Number of shell nodes on the interface
+        ! @input xyz: Coords of shell nodes in reference config
+        ! @input area: Tributary area of each shell node
+        ! @input tmod: Tangent modulus associated with each node
+        ! @returns: Mx,My,Mz weights
+        integer, intent(in) ::  n_sh
+        real(8), intent(in) ::  xyz(3, n_sh), area(n_sh), tmod(n_sh)
+        integer             ::  ii
+        real(8)             ::  rw(4, n_sh)
+        real(8)             ::  mx(n_sh), my(n_sh), mz(2, n_sh), mxtot,
+     1                          mytot, mztot
+        do ii = 1, n_sh
+          mx(ii) = xyz(2, ii) * area(ii) * tmod(ii)
+          mxtot = mxtot + mx(ii) * xyz(2, ii)
+          my(ii) = -xyz(1, ii) * area(ii) * tmod(ii)
+          mytot = mytot + my(ii) * xyz(1, ii)
+          mz(1:2, ii) = [-xyz(2, ii), xyz(1, ii)] * area(ii) * tmod(ii)
+          mztot = mztot + area(ii) * tmod(ii) * norm2(xyz(1:2, ii))**2
+        end do
+        rw(1, :) = mx / mxtot
+        rw(2, :) = my / abs(mytot)
+        rw(3:4, :) = mz / mztot
+      end
+        
+C ******************************************************************** C
+      pure function lin_rot(n_sh, r0, r, rw) result(linr)
+        ! Returns the linearization of the rotation constraints.
+        ! @input n_sh: Number of shell nodes on the interface
+        ! @input r0: Rotation matrix from reference to initial configs
+        ! @input r: Rotation matrix from initial to current configs
+        ! @input rw: Weights for the moments
+        ! @returns: Matrix for the linearization of the rotations
+        integer, intent(in) ::  n_sh
+        real(8), intent(in) ::  r(3, 3), r0(3, 3), rw(4, n_sh)
+        real(8)             ::  linr(3, 3*n_sh)
+        integer             ::  ii
+        real(8)             ::  w_bar(3, 3), s_bar(3, 3), s(3, 3),
+     1                          t_bar(3), rr0(3, 3), rr0_T(3, 3)
+        t_bar = r0(:, 3)
+        rr0 = matmul(r, r0)
+        rr0_T = transpose(rr0)
+        do ii = 1, n_sh
+          ! Moment about x
+          w_bar = 0.d0
+          w_bar(3, 3) = rw(1, ii)
+          s_bar(:, 1) = matmul(w_bar, t_bar)
+          ! Moment about y
+          w_bar = 0.d0
+          w_bar(3, 3) = rw(2, ii)
+          s_bar(:, 2) = matmul(w_bar, t_bar)
+          ! Moment about z (torque)
+          w_bar = 0.d0
+          w_bar(1, 3) = rw(3, ii)
+          w_bar(3, 1) = rw(3, ii)
+          w_bar(2, 3) = rw(4, ii)
+          w_bar(3, 2) = rw(4, ii)
+          s_bar(:, 3) = matmul(w_bar, t_bar)
+          ! Rotate from reference to current config
+          s = matmul(rr0, matmul(s_bar, rr0_T))
+          linr(1:3, 3*ii-2:3*ii) = transpose(s)
+        end do        
+      end
+C ******************************************************************** C
+C BELONGS IN MPC
+C ******************************************************************** C
+      function form_tmod_vec(n_sh, beam_id) result(tmod)
+        ! Returns the tangent modulus for each node.
+        ! @input n_sh: Number of shell elements on interface.
+        ! @input beam_id: Beam node tag for the interface.
+        ! @returns: The tangent modulus averaged for each node.
+        integer, intent(in)   ::  n_sh, beam_id
+        integer               ::  asize
+        parameter(asize=1000)
+        integer               ::  TMOD_ARR_ID, ID_ADJ
+        parameter(TMOD_ARR_ID=1, ID_ADJ=3)
+        real(8)               ::  tmod_arr(asize)
+        real(8)               ::  tmod(n_sh), nelem
+        integer               ::  info_arr(3*n_sh), interf_id, ii,
+     1                            elem_indexs(3)
+        pointer(p_tmod, tmod_arr)
+        pointer(p_info, info_arr)
+#include <SMAAspUserSubroutines.hdr>
+        ! Function start
+        interf_id = beam_id + ID_ADJ
+        p_tmod = SMAFloatArrayAccess(TMOD_ARR_ID)
+        p_info = SMAIntArrayAccess(interf_id)
+        tmod = 0.d0
+        do ii = 1, n_sh
+          elem_indexs(1:3) = info_arr(3*ii-2:3*ii)
+          nelem = 0.
+          do j = 1, 3
+            if (elem_indexs(j) /= 0) then
+              tmod(ii) = tmod(ii) + tmod_arr(elem_indexs(j))
+              nelem = nelem + 1.
+            end if
+          end do
+          tmod(ii) = tmod(ii) / nelem
+        end do
       end function
 C ******************************************************************** C
       end  ! END SUBROUTINE
