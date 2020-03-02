@@ -21,6 +21,10 @@
 !     [3] Horn (1987), Closed-form solution of absolute orientation 
 !     using unit quaternions
 !
+! TODOs:
+!   - Clean-up the variables that are defined / used
+!   - Look at efficiency, joining loops together in functions
+!
 ! Written by: A Hartloper, EPFL, alexander.hartloper@epfl.ch
 
 ! Intel pre-processor command for free-form input in .for files
@@ -63,11 +67,12 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   ! Orientation normal to beam plane
   real(8)               :: t_def(ndim)
   ! Arrays that depend on the number of nodes
-  real(8), allocatable  :: c_mat(:, :), d_mat(:, :), g_mat(:, :), &
-                           q_mat(:, :), x_shell_def(:, :), &
+  real(8), allocatable  :: c_mat(:, :), d_mat(:, :), &
+                           rot_lin(:, :), x_shell_def(:, :), &
                            x_shell(:, :), u_shell(:, :), &
-                           w_lin(:), psi_all(:), weights(:, :), &
-                           x_shell_ref(:, :), q_mat2(:, :)
+                           warp_lin(:), psi_all(:), weights(:, :), &
+                           x_shell_ref(:, :), node_areas(:), shear_weights(:, :)
+  integer, allocatable  ::  node_classes(:)
   ! For the rotation quaternion and computations
   real(8)               ::  b_mat(quatdim, quatdim), &
                             beta(quatdim, quatdim), &
@@ -85,9 +90,9 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   ! Defines the max number of inner iterations to do and the tolerance
   parameter                 (n_inner=10, tol_inner=1.d-8)
   ! Section properties
-  real(8)               ::  section_props(4), d_cl
-  real(8)               ::  rigid_scale
-  real(8)               ::  sec_props(4), sp_dimensional(4)
+  real(8)               ::  section_props(4), d_cl, bf
+  real(8)               ::  rigid_scale, mesh_sizes(2)
+  real(8)               ::  sec_props(4), area_and_moi(4)
   ! Numerical parameters
   real(8)               :: one, two, zero
   parameter                (one=1.0d0, two=2.0d0, zero=0.d0)
@@ -107,23 +112,18 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
   allocate(x_shell_ref(ndim, n_shell))
   allocate(c_mat(ndim, n_shell))
   allocate(d_mat(ndim, n_shell))
-  allocate(g_mat(ndim, ndim * n_shell))
-  allocate(q_mat(ndim, ndim * n_shell))
+  allocate(rot_lin(ndim, ndim * n_shell))
   allocate(psi_all(n_shell))
-  allocate(w_lin(ndim * n_shell))
-  allocate(weights(5, n_shell))
+  allocate(warp_lin(ndim * n_shell))
+  allocate(weights(4, n_shell))
   allocate(disp_lin(ndim, ndim * n_shell))
-  allocate(bend_tang(ndim, n_shell))
-  allocate(my_torque(ndim, n_shell))
   allocate(tmod(n_shell))
-  allocate(tmod0(n_shell))
-  allocate(wtmod(n_shell))
   allocate(rotw(4, n_shell))
-  allocate(q_mat2(ndim, ndim * n_shell))
   allocate(xy_bar(2, n_shell))
   allocate(f_nodes(4, n_shell))
-  allocate(disp_lin2(ndim, ndim * n_shell))
-  allocate(w_lin2(ndim * n_shell))
+  allocate(node_areas(n_shell))
+  allocate(shear_weights(n_shell, 3))
+  allocate(node_classes(n_shell))
 
 ! ******************************************************************** !
 ! Subroutine definition
@@ -149,26 +149,29 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
     c_mat(:, i) = x_shell(:, i) - xc0
   end do
   r_ref = ini_config(c_mat, n_shell)
-  ! Compute the warping function at each node
-  psi_all = warp_fun(c_mat, n_shell, r_ref)
+  x_shell_ref = matmul(transpose(r_ref), c_mat)
 
+  ! Compute section properties
+  d_cl = section_props(1) - section_props(3)
+  bf = section_props(2)
+  node_classes = classify_nodes(n_shell, x_shell_ref, d_cl, bf)
+  mesh_sizes = compute_mesh_size(n_shell, x_shell_ref, section_props, node_classes)
+  node_areas = compute_node_areas(n_shell, x_shell_ref, section_props, node_classes, mesh_sizes)
+  xy_bar = normalized_coords(n_shell, x_shell_ref(1:2, :), section_props(1), section_props(2))
+  area_and_moi = compute_section_props(n_shell, x_shell_ref(1:2, :), node_areas)
+  total_area = area_and_moi(1)
+  psi_all = warp_fun(c_mat, n_shell, r_ref)
   ! The tangent modulus is assumed to be elastic at all shell nodes
   tmod = 1.d0
+  
   ! Calculate the elastic shear weights
-  ! todo: pass x_shell_ref where needed
-  x_shell_ref = matmul(transpose(r_ref), c_mat)
-  ! todo: weights should return just the shear weights for strong / weak axis
-  shear_weights = calc_weights(x_shell_ref, n_shell, section_props, tmod)
-  ! todo: the individual areas and total area should be computed as a part of the section properties
-
-  ! Compute the nodal forces based on the normal stresses
-  ! todo: want to get the individual nodal areas also as a part of section properties
-  xy_bar = normalized_coords(n_shell, x_shell_ref(1:2, :), section_props(1), section_props(2))
-  sp_dimensional = compute_section_props(n_shell, x_shell_ref(1:2, :), weights(1, :))
-  ! Assume elastic, ksec is identity
-  forall(i = 1:4) ksec(i, i, 1) = one
-  usec = calc_section_deform(ksec, sp_dimensional, section_props(1), section_props(2))
-  f_nodes = nodal_forces(n_shell, xy_bar, weights(1, :), tmod, usec)
+  shear_weights = shear_factors(x_shell_ref, n_shell, section_props, mesh_sizes, node_classes)
+  ! Assume elastic, ksec is identity, else can compute the section stiffness
+  forall(i = 1:4) ksec(i, i) = one
+  usec = calc_section_deform(ksec, area_and_moi, section_props(1), section_props(2))
+  f_nodes = nodal_forces(n_shell, xy_bar, node_areas, tmod, usec)
+  weights(1, :) = node_areas
+  weights(2:4, :) = transpose(shear_weights)
 
   ! Initialize the linearization to the arithmetic mean
   temp33 = zero
@@ -201,7 +204,7 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
     do i = 1, n_shell
       beta=left_quat(zero,d_mat(:,i)) - right_quat(zero,c_mat(:,i))
       beta_T = transpose(beta)
-      b_mat = b_mat + wtmod(i) / wtmod_tot * matmul(beta_T,beta)
+      b_mat = b_mat + node_areas(i) / total_area * matmul(beta_T,beta)
     end do
     lam_q = calc_opquat(b_mat)
     
@@ -212,25 +215,22 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
     r_mat = rot_mat(op_quat)
 
     ! Compute the linearized centroid displacement
-    ! todo: this should correspond to the C&A method
     disp_lin = calc_disp_lin(n_shell, weights, total_area, r_ref, r_mat)
-    
+
     ! Check for convergene of the inner iterations
     if (norm2(u_cent-uc_prev)/(norm2(uc_prev)+1.d-9)<tol_inner) then
       exit
     end if
   end do  ! over k_inner
  
-  ! Rotation linearization
-  d_cl = section_props(1) - section_props(3)
-  my_torque = torquer(n_shell, x_shell_ref, r_mat, weights(1, :), d_cl)
+  ! Rotation linearization using nodal force method
   rotw(1:2, :) = f_nodes(2:3, :)
-  rotw(3:4, :) = my_torque
-  q_mat2 = lin_rot(n_shell, r_ref, r_mat, rotw)
+  rotw(3:4, :) = torquer(n_shell, x_shell_ref, r_mat, node_areas, d_cl)
+  rot_lin = lin_rot(n_shell, r_ref, r_mat, rotw)
  
   ! Compute the warping amplitude
   t_def = matmul(r_mat, r_ref(:, 3))
-  w_amp = warp_amp(x_shell,x_shell_def,u_cent,t_def,r_mat,psi_all)
+  w_amp = warp_amp(x_shell, x_shell_def, u_cent, t_def, r_mat, psi_all)
   ! Linearized warping
   do i = 1, n_shell
     warp_lin(3*i-2:3*i) = t_def * f_nodes(4, i)
@@ -245,7 +245,7 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
     ! i_sh corresponds to the shell nodes since i starts at 2
     i_sh = i - 1
     ! Displacement constraints
-    a(1:3, 1:3, i) = -disp_lin(3*i_sh-2:3*i_sh, 1:3)
+    a(1:3, 1:3, i) = -disp_lin(1:3, 3*i_sh-2:3*i_sh)
     ! Rotation constraints
     a(4:6, 1:3, i) = -rot_lin(1:3, 3*i_sh-2:3*i_sh)
     ! Warping constraint

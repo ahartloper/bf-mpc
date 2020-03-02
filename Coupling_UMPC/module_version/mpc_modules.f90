@@ -4,12 +4,11 @@ module mpc_modules
 
   contains
 ! ******************************************************************** !
-!     Skew symmetric matrix from vector
-! ******************************************************************** !
+  
+  pure function skew_sym(v) result(vss)
   ! Returns the 3x3 skew symmetric matrix from axial vector v
   ! @ input v: Axial vector of length 3
   ! @ returns vss: 3x3 skew symmetric matrix
-  pure function skew_sym(v) result(vss)
     implicit none
     real(8), intent(in) :: v(3)
     real(8)             :: vss(3, 3)
@@ -18,15 +17,15 @@ module mpc_modules
     vss(:, 2) = [ -v(3), 0.d0, v(1) ]
     vss(:, 3) = [ v(2), -v(1), 0.d0 ]
   end function
+
 ! ******************************************************************** !
-!     Left quaternion representation from 3 element vector
-! ******************************************************************** !
+  
+  pure function left_quat(v0, v) result(ql)
   ! Returns the 4x4 left-side matrix representing {v0, v}
   ! @ input v0: Real part of rotation quaternion
   ! @ input v: Imaginary part of rotation quaternion, length 3
   ! @ return ql: Matrix representing left-hand quaternion 
   !              multiplication
-  pure function left_quat(v0, v) result(ql)
     implicit none
     real(8), intent(in) :: v0
     real(8), intent(in) :: v(3)
@@ -38,15 +37,15 @@ module mpc_modules
     ql(2:4, 2:4) = skew_sym(v)
     forall(ii = 1:3) ql(1 + ii, 1 + ii) = ql(1 + ii, 1 + ii) + v0
   end function
+
 ! ******************************************************************** !
-!     Right quaternion representation from 3 element vector
-! ******************************************************************** !
+  
+  pure function right_quat(v0, v) result(qr)
   ! Returns the 4x4 right-side matrix representing {v0, v}
   ! @ input v0: Real part of rotation quaternion
   ! @ input v: Imaginary part of rotation quaternion, length 3
   ! @ return qr: Matrix representing right-hand quaternion 
   !              multiplication
-  pure function right_quat(v0, v) result(qr)
     implicit none
     real(8), intent(in) :: v0
     real(8), intent(in) :: v(3)
@@ -58,13 +57,13 @@ module mpc_modules
     qr(2:4, 2:4) = -skew_sym(v)   
     forall(ii = 1:3) qr(1 + ii, 1 + ii) = qr(1 + ii, 1 + ii) + v0   
   end function
+
 ! ******************************************************************** !
-!     Rotation matrix from quaternion
-! ******************************************************************** !
+  
+  pure function rot_mat(q) result(r)
   ! Returns the 3x3 matrix representing rotation quaternion q
   ! @ input q: Length 4 rotation quaternion
   ! @ returns r: 3x3 rotation matrix
-  pure function rot_mat(q) result(r)
   implicit none
     real(8), intent(in) :: q(4)
     real(8)             :: r(3, 3), one, two
@@ -80,14 +79,14 @@ module mpc_modules
                two * (q(3) * q(4) - q(1) * q(2)),&
                one - two * (q(2) ** 2 + q(3) ** 2) ]
   end function
+
 ! ******************************************************************** !
-!     Stack of skew symmetric matrix from columns of matrix
-! ******************************************************************** !
+  
+  pure function skew_mat(r) result(rr)
   ! Returns the 9x3 skew symmetric matrix from the columns of R
   ! @ input r: 3x3 matrix
   ! @ outputs rr: Vertical stack of the skew symmetric matrices 
   !               formed from the 3 columns of R
-  pure function skew_mat(r) result(rr)
   implicit none
     real(8), intent(in) :: r(3, 3)
     real(8)             :: rr(9, 3)
@@ -96,13 +95,13 @@ module mpc_modules
     rr(4:6, :) = skew_sym(r(:, 2))
     rr(7:9, :) = skew_sym(r(:, 3))
   end function
+
 ! ******************************************************************** !
-!     Create a 3x3 matrix out of vector of length 9
-! ******************************************************************** !
+  
+  pure function vec2mat_9(v) result(r)
   ! Returns the 3x3 matrix from the vector v
   ! @ input v: Vector of lenght 9
   ! @ returns r: 3x3 matrix
-  pure function vec2mat_9(v) result(r)
   implicit none
     real(8), intent(in) :: v(9)
     real(8)             :: r(3, 3)
@@ -111,15 +110,15 @@ module mpc_modules
     r(:, 2) = [v(2), v(5), v(8)]
     r(:, 3) = [v(3), v(6), v(9)]
   end function
+
 ! ******************************************************************** !
-!     Compute optimal rotation quaternion
-! ******************************************************************** !
-  ! Returns the optimal rotation and associated eigenvalue
-  ! @ input b: \mathcal{B} matrix from [2]
-  ! @ returns lambda_and_q: First entry is the minimum eigenvalue,
-  !                         following entries are the associated 
-  !                         eigenvector
+  
   function calc_opquat(b) result(lambda_and_q)
+    ! Returns the optimal rotation and associated eigenvalue
+    ! @ input b: \mathcal{B} matrix from [2]
+    ! @ returns lambda_and_q: First entry is the minimum eigenvalue,
+    !                         following entries are the associated 
+    !                         eigenvector
     implicit none
     real(8), intent(in) ::  b(4, 4)
     real(8)             ::  be(4, 4)
@@ -150,20 +149,20 @@ module mpc_modules
     lambda_and_q(1) = w(1)
     lambda_and_q(2:5) = z(:, 1)
   end function
+
 ! ******************************************************************** !
-!     Compute G matrix
-! ******************************************************************** !
-  ! Returns the instantaneous rotation matrix
-  ! @ input q: Optimal rotation quaternion
-  ! @ input n_sh: Number of shell nodes (N)
-  ! @ input b: \matcal{B} matrix from [2]
-  ! @ input c: C matrix from [2]
-  ! @ input lam: Minimum eigenvalue of B matrix
-  ! @ input r: Rotation matrix of optimal rotation quaternion
-  ! @ returns g: Instantaneous rotation matrix
+  
   function calc_g(q, n_sh, b, c, lam, r) result(g)
-  ! Input and output
-  implicit none
+    ! Returns the instantaneous rotation matrix
+    ! @ input q: Optimal rotation quaternion
+    ! @ input n_sh: Number of shell nodes (N)
+    ! @ input b: \matcal{B} matrix from [2]
+    ! @ input c: C matrix from [2]
+    ! @ input lam: Minimum eigenvalue of B matrix
+    ! @ input r: Rotation matrix of optimal rotation quaternion
+    ! @ returns g: Instantaneous rotation matrix
+    ! Input and output
+    implicit none
     integer, intent(in)   ::  n_sh
     real(8), intent(in)   ::  q(4), b(4, 4), c(3, n_sh), r(3, 3)
     real(8), intent(in)   ::  lam
@@ -197,21 +196,24 @@ module mpc_modules
     g = 4.d0 * g
     
   end function
+
 ! ******************************************************************** !
-!     Compute linearized rotation matrix
-! ******************************************************************** !
+  
+      pure function calc_q(q, n_sh, g) result(qq)
+      implicit none
       ! Returns the linearization of the optimal rotation vector
       ! @ input q: Optimal rotation quaternion, size 4
       ! @ input n_sh: Number of shell nodes (N)
       ! @ input g: Instantaneous rotation matrix, 3x3N
       ! @ returns qq: Linearized rotation matrix
-      pure function calc_q(q, n_sh, g) result(qq)
       ! Input and output
       integer, intent(in)   ::  n_sh
       real(8), intent(in)   ::  q(4), g(3, 3*n_sh)
       real(8)               ::  qq(3, 3*n_sh)
       ! Internal
       real(8)               ::  qrr(4, 4), qrr_3(4, 3)
+      integer               ::  quatdim
+      parameter(quatdim=4)
       ! Function start
       ! Compute the linearized rotation matrix
       qrr = right_quat(q(1), q(2:quatdim))
@@ -219,14 +221,14 @@ module mpc_modules
       qq = matmul(qrr_3(2:quatdim, :), g)
       
       end function
+
 ! ******************************************************************** !
-!     Order reference configuration
-! ******************************************************************** !
+      
+      pure function order_ini(o) result(o2)
       ! Orders o to have the orientation x, y, z as the columns of o2
       ! @ input o: Un-ordered reference configuration
       ! @ returns o2: Ordered reference configuration such that the 
       !               columns of o2 are a right-handed coordinate system
-      pure function order_ini(o) result(o2)
       real(8), intent(in) :: o(3, 3)
       real(8)             :: o2(3, 3), xo(3), yo(3), zo(3), cross_vec(3)
       real(8)             :: test
@@ -252,15 +254,15 @@ module mpc_modules
         o2(:, 3) = -zo
       end if
       end function
+
 ! ******************************************************************** !
-!     Compute reference configuration
-! ******************************************************************** !
-  ! Returns the right-hand ordered reference configuration
-  ! @ input init_pts: initial [x, y, z] coordinates of each point
-  ! @ input n_sh: Number of shell nodes (N)
-  ! @ returns o: Orientation of the reference configuration that is 
-  !              a valid right-handed coordinate system.
+      
   function ini_config(init_pts, n_sh) result(o)
+    ! Returns the right-hand ordered reference configuration
+    ! @ input init_pts: initial [x, y, z] coordinates of each point
+    ! @ input n_sh: Number of shell nodes (N)
+    ! @ returns o: Orientation of the reference configuration that is 
+    !              a valid right-handed coordinate system.
   ! Input and output
   implicit none
     integer, intent(in) ::  n_sh
@@ -301,9 +303,10 @@ module mpc_modules
     ! The eigenvalues are returned in asscending order
     o = order_ini(z)
   end function
+
 ! ******************************************************************** !
-!     Calculate the warping function for all nodes
-! ******************************************************************** !
+  
+  pure function warp_fun(c, n_sh, r0) result(psi)
   ! Returns the warping function evaluated at each node.
   ! @ input c: Location of nodes in initial config. relative to 
   !            centroid, size 3xN
@@ -314,7 +317,6 @@ module mpc_modules
   ! Notes:
   !   - If the distance between adjacent nodes is less than 1e-8
   !   then nodes on the web can be incorrectly identified
-  pure function warp_fun(c, n_sh, r0) result(psi)
     ! Input and output
     implicit none
     integer, intent(in)   ::  n_sh
@@ -349,9 +351,10 @@ module mpc_modules
       end if
     end do
   end function
+
 ! ******************************************************************** !
-!     Calculate the warping amplitude
-! ******************************************************************** !
+  
+  pure function warp_amp(x_ini, x_def, u_c, t, r, psi) result(w)
   ! Returns the value of the warping amplitude.
   ! @ input x_ini: pos. of each node in the initial configuration
   ! @ input x_def: pos. of each node in the deformed configuration
@@ -360,7 +363,6 @@ module mpc_modules
   ! @ input r: Rotation from initial to deformed configurations
   ! @ input psi: Warping function at each node
   ! @ returns w: Warping amplitude
-  pure function warp_amp(x_ini, x_def, u_c, t, r, psi) result(w)
     ! Input and output
     implicit none
     real(8), intent(in) ::  x_def(:, :), x_ini(:, :), u_c(3), t(3)
@@ -383,67 +385,15 @@ module mpc_modules
     end do
     w = w / non_zero_nodes
   end function
+
 ! ******************************************************************** !
-!     Compute the linearized warping vector
-! ******************************************************************** !
-  ! todo: decide what form we want and clean this function up
-  ! Returns the linearized warping vector.
-  ! @ input x_def: pos. of nodes in deformed configuration, 3xN
-  ! @ input n_sh: Number of shell nodes (N)
-  ! @ input t0: Orientation of the normal to the cross-section in  
-  !             the reference configuration
-  ! @ input psi: Warping function for all the nodes
-  ! @ input r: Rotation from initial to deformed configuration
-  ! @ input g: Instantaneous rotation matrix, size 3x3N
-  ! @ input we: Area weight value for each node, size N
-  ! @ returns w_lin: Linearization of warping amplitude w.r.t x
-  !
-  ! Notes:
-  !   - we containts the area weights for each node, then the shear
-  !   weights for each node, only use the first set
-  pure function calc_lin_w(c2, n_sh, t0, psi, r, we) result(w_lin)
-    ! Input and output
-    implicit none
-    integer, intent(in)   ::  n_sh
-    real(8), intent(in)   ::  c2(3, n_sh), t0(3), psi(n_sh),r(3, 3)
-    real(8), intent(in)   ::  we(n_sh)
-    real(8)               ::  w_lin(3*n_sh)
-    ! Internal
-    integer               ::  i, j, num_psi_non_zero
-    real(8)               ::  t(3), we_total
-    real(8)               ::  zero, one, two
-    parameter                 (zero = 0.d0, one = 1.d0, two = 2.d0)
-    real(8)               ::  zero_tol, d_cl
-    parameter                 (zero_tol=1.d-6)
-    ! Assemble the linearized warping vector
-    t = matmul(r, t0)
-    
-    ! Assemble the linearized warping vector
-    w_lin = 0.d0
-    we_total = 0.d0
-    do i = 1, n_sh
-      if (abs(psi(i)) > zero_tol) then
-        ! todo: bimom can be calculated in the function with psi
-        we_total = we_total + abs(c2(1, i) * psi(i) * we(i))
-        w_lin(3*i-2:3*i) = w_lin(3*i-2:3*i) + t * psi(i) * we(i)
-      end if
-    end do
-    ! Normalize by the total bimoment to satisfy equilibrium
-    ! Bimom = (M_f,t + M_f,b) * (d_cl / 2)
-    d_cl = maxval(c2(2, :))
-    we_total = we_total * d_cl
-    w_lin = w_lin / we_total
-    
-  end function
-! ******************************************************************** !
-!     Extract rotation vector from quaternion
-! ******************************************************************** !
+  
+  pure function extract_rotation(q) result(phi)
   ! Returns the rotation vector extracted from the quaternion
   ! @ input q: Rotation quaternion
   ! @ returns phi: Euler angle representation of q
   !
   ! From Abaqus Theory Guide 1.3.1
-  pure function extract_rotation(q) result(phi)
     ! Input and output
     implicit none
     real(8), intent(in) ::  q(4)
@@ -461,130 +411,10 @@ module mpc_modules
       phi(:) = 0.d0
     end if
   end function
+
 ! ******************************************************************** !
-!     Determine the weights for all the nodes
-! ******************************************************************** !
-  ! Returns the weight value for each node
-  ! @ input p: Shell nodes in the reference configuration, size 3xN
-  ! @ input n_sh: Number of shell nodes (N)
-  ! @ input section_props: Section properties
-  ! @ input etang: Tangent modulus, size N
-  ! @ returns w: Weight value for each node
-  !   - Row 1: Area weight
-  !   - Row 2: Normalized strong axis weight
-  !   - Row 3: Normalized weak axis weight
-  !   - Row 4: Normalized complementary strong axis weight
-  !   - Row 5: Normalized normal force for shear
-  !
-  ! Notes:
-  !   - The weight represents the equivalent area of each node
-  !   - Section properties contains: [d, bf, tf, tw]
-  !   - The weights are only valid if the interface is elastic
-  !   - The flange and web mesh distances are assumed to be constant
-  !     between nodes
-  function calc_weights(p, n_sh, section_props, etang) result(ww)
-    ! Input and output
-    implicit none
-    integer, intent(in)   ::  n_sh
-    real(8), intent(in)   ::  p(3, n_sh), section_props(4), etang(n_sh)
-    real(8)               ::  ww(5, n_sh)
-    ! Internal variables
-    ! Tags for node positions
-    integer               ::  web_tag, flange_tag, corner_tag, joint_tag
-    parameter                 (web_tag=1, flange_tag=2, corner_tag=3, joint_tag=4)
-    integer               ::  classification(n_sh)
-    ! For weights at each tag
-    real(8)               ::  web_weight, flange_weight,corner_weight, joint_weight
-    real(8)               ::  tf, tw, delta_f, delta_w, x_max, y_max, pt(3), x_max_2, y_max_2
-    integer               ::  ii, d_digits, deci, n_digits, c, tf_tw
-    ! For shear weights
-    real(8) ::  width, depth, v_weights(n_sh, 4)
-    ! Tolerance in positions
-    real(8) :: zero_tol
-    parameter(zero_tol=1.d-3)    
-    ! Function start
-    depth = section_props(1)
-    width = section_props(2)
-    tf = section_props(3)
-    tw = section_props(4)
-    
-    ! Classify the points
-    classification(:) = 0
-    x_max = maxval(p(1, :))
-    y_max = maxval(p(2, :))
-    do ii = 1, n_sh
-      pt = p(:, ii)
-      if (abs(pt(1)) < zero_tol) then
-        ! Point is on the web
-        classification(ii) = web_tag
-      end if
-      if (abs(abs(pt(2)) - y_max) < zero_tol) then
-        ! Point is on the flange
-        if (classification(ii) == web_tag) then
-          ! Point is on the web and flange
-          classification(ii) = joint_tag;
-        else if (abs(abs(pt(1)) - x_max) < zero_tol) then
-          ! Point is on the corner of the flange
-          classification(ii) = corner_tag
-        else
-          ! Just on the flange
-          classification(ii) = flange_tag
-        end if
-      end if
-    end do
-    
-    ! Calculate the mesh distance for flange and web nodes
-    ! Start search for 2nd greatest values
-    x_max_2 = -x_max
-    y_max_2 = -y_max
-    do ii = 1, n_sh
-      pt = p(:, ii)
-      c = classification(ii)
-      ! Web
-      if (c == web_tag) then
-        ! Set 2nd largest y value
-        if (y_max_2 < pt(2) .and. pt(2) < y_max) then
-          y_max_2 = pt(2)
-        end if
-      end if
-      ! Flange
-      if ((c==flange_tag .or. c==joint_tag) .and. pt(2) > 0.d0) then
-        ! Set the 2nd largest x value
-        if (x_max_2 < pt(1) .and. pt(1) < x_max) then
-          x_max_2 = pt(1)
-        end if
-      end if
-    end do
-    delta_f = x_max - x_max_2
-    delta_w = y_max - y_max_2
-    
-    ! Calculate the area weights for each class
-    web_weight = delta_w * tw
-    flange_weight = delta_f * tf
-    corner_weight = 0.5d0 * flange_weight
-    joint_weight = flange_weight + 0.5d0 * tw * delta_w
-    
-    ! Calculate the shear weights
-    v_weights = shear_factors(p, n_sh, depth, width, tf, tw, delta_f, delta_w, classification, etang)
-    ! Assign the area weights
-    do ii = 1, n_sh
-      c = classification(ii)
-      if (c == web_tag) then
-        ww(1, ii) = web_weight
-      else if (c == flange_tag) then
-        ww(1, ii) = flange_weight
-      else if (c == corner_tag) then
-        ww(1, ii) = corner_weight
-      else if (c == joint_tag) then
-        ww(1, ii) = joint_weight
-      end if
-      ! Add the shear weights
-      ww(2:5, ii) = v_weights(ii, :)
-    end do
-  end function
-! ******************************************************************** !
-!     Calculate the shear factor for flange nodes (weak and strong)
-! ******************************************************************** !
+  
+  pure function shear_flange(xi, d, d1, bf, tf, tw) result(v)
   ! Returns the shear factors for the flange nodes
   ! @ input xi: Flange node
   ! @ input d: Section depth
@@ -595,7 +425,6 @@ module mpc_modules
   ! @ returns: The shear resultants
   !             v(1): strong axis flange
   !             v(2): weak axis flange
-  pure function shear_flange(xi, d, d1, bf, tf, tw) result(v)
     ! Input and output
     implicit none
     real(8), intent(in) ::  xi(3), d, d1, bf, tf, tw
@@ -610,9 +439,10 @@ module mpc_modules
     ! Weak axis
     v(2) = (bf ** 2 - 4. * x1 ** 2) / 8.
   end function
-! ******************************************************************** !
-!     Calculate the complementary shear factor for flange nodes 
-! ******************************************************************** !
+
+  ! ******************************************************************** !
+  
+  pure function comp_shear_flange(xi, d_cl, bf) result(v)
   ! Returns the complementary shear factors for the flange nodes
   ! @ input xi: Flange node
   ! @ input d_cl: Section depth minus flange thicknesses
@@ -625,7 +455,6 @@ module mpc_modules
   !   tive y direction
   !   - At the joint nodes no complementary shear is applied if the
   !   positive and negative forces cancel out
-  pure function comp_shear_flange(xi, d_cl, bf) result(v)
     ! Input and output
     implicit none
     real(8), intent(in) ::  xi(3), d_cl, bf
@@ -644,9 +473,10 @@ module mpc_modules
       v = sgn * (bf - 2. * abs(x1)) * d_cl / 4.
     end if
   end function
+
 ! ******************************************************************** !
-!     Calculate the shear factor for web nodes (weak and strong)
-! ******************************************************************** !
+  
+  pure function shear_web(xi, d, d1, bf, tf, tw) result(v)
   ! Returns the shear factors for the web nodes
   ! @ input xi: Flange node
   ! @ input d: Section depth
@@ -657,7 +487,6 @@ module mpc_modules
   ! @ returns: The shear resultants
   !             v(1): strong axis web 
   !             v(2): weak axis web 
-  pure function shear_web(xi, d, d1, bf, tf, tw) result(v)
     ! Input and output
     implicit none
     real(8), intent(in) ::  xi(3), d, d1, bf, tf, tw
@@ -677,37 +506,43 @@ module mpc_modules
     ! Only valid for x1 = 0
     v(2) = (2.*bf**2*tf + (d-2.*tf)*tw**2) / (8.*d1)
   end function
+
 ! ******************************************************************** !
-!     Calculate the shear factor resultants for the strong and weak axes
-! ******************************************************************** !
-  ! Returns the shear factor resultant for one flange and web
-  ! @ input p: Shell nodes in the reference configuration, 3xN
-  ! @ input n_sh: Number of shell nodes (N)
-  ! @ input d: Section depth
-  ! @ input bf: Section width
-  ! @ input tf: Flange thickness
-  ! @ input tw: Web thickness
-  ! @ input c_tags: Node classification tag, size N
-  ! @ input etang: Tangent modulus, size N
-  ! @ returns: The normalized shear resultants, size Nx4
-  !   - Column 1: strong axis
-  !   - Column 2: weak axis
-  !   - Column 3: complementary force for strong axis
-  !   - Column 4: normal component of shear on web
-  pure function shear_factors(p, n_sh, d, bf, tf, tw, delta_f, delta_w, c_tags, etang) result(v)
+  
+  pure function shear_factors(p, n_sh, sec_props, mesh_sizes, c_tags) result(v)
+    ! Returns the shear factor resultant for one flange and web
+    ! @ input p: Shell nodes in the reference configuration, 3xN
+    ! @ input n_sh: Number of shell nodes (N)
+    ! @ input d: Section depth
+    ! @ input bf: Section width
+    ! @ input tf: Flange thickness
+    ! @ input tw: Web thickness
+    ! @ input c_tags: Node classification tag, size N
+    ! @ input etang: Tangent modulus, size N
+    ! @ returns: The normalized shear resultants, size Nx4
+    !   - Column 1: strong axis
+    !   - Column 2: weak axis
+    !   - Column 3: complementary force for strong axis
     ! Input and output
     implicit none
     integer, intent(in) ::  n_sh, c_tags(n_sh)
-    real(8), intent(in) ::  p(3, n_sh), d, bf, tf, tw, delta_f, delta_w, etang(n_sh)
-    real(8)             ::  v(n_sh, 4)
+    real(8), intent(in) ::  p(3, n_sh), sec_props(4), mesh_sizes(2)
+    real(8)             ::  v(n_sh, 3)
     ! Internal variables
-    real(8)             ::  d1, tau(2), total_strong, total_weak, &
-                            p_corner(3), tau_2, d_cl, tau_3, tau_temp(2), p_temp(3)
+    real(8)             ::  d1, tau(2), total_strong, total_weak
+    real(8)             ::  p_corner(3), tau_2, d_cl, tau_3, tau_temp(2), p_temp(3)
+    real(8)             ::  delta_f, delta_w, d, bf, tf, tw
     integer             ::  ii, c
     ! Classification tags
     integer             ::  web_tag, flange_tag, corner_tag, joint_tag
     parameter              (web_tag=1, flange_tag=2, corner_tag=3, joint_tag=4)
     ! Function start
+    d = sec_props(1)
+    bf = sec_props(2)
+    tf = sec_props(3)
+    tw = sec_props(4)
+    delta_f = mesh_sizes(1)
+    delta_w = mesh_sizes(2)
     ! The first value of tau is for the strong axis, the second is for
     ! the weak axis
     ! tau_2 is the complementary shear in the flange
@@ -718,22 +553,14 @@ module mpc_modules
     total_weak = 0.
     do ii = 1, n_sh
       c = c_tags(ii)
-      tau_3 = 0.
       if (c == web_tag) then
         tau = tw * delta_w * shear_web(p(:, ii), d, d1, bf, tf, tw)
-        ! Don't consider the complementary shear for the web
+        ! No complementary shear for the web
         tau_2 = 0.
         
         ! Correction to neglect the weak axis shear for the web
         ! assume almost all shear on the flanges
-        tau(2) = tau(2) * 0.05d0
-        
-        ! The normal component of the shear stress resultant
-        p_temp = p(:, ii) - [ 0.d0, delta_w/2., 0.d0 ]
-        tau_temp = shear_web(p_temp, d, d1, bf, tf, tw)
-        p_temp = p(:, ii) + [ 0.d0, delta_w/2., 0.d0 ]
-        tau_temp = tau_temp - shear_web(p_temp, d, d1, bf, tf, tw)
-        tau_3 = tw * delta_w * tau_temp(1)
+        tau(2) = tau(2) * 0.0d0
         
       else if (c == flange_tag) then
         tau = tf * delta_f * shear_flange(p(:, ii), d, d1, bf, tf, tw)
@@ -742,17 +569,9 @@ module mpc_modules
         ! Correction to neglect the strong axis shear for the flanges
         ! assume all shear on the web
         tau(1) = 0.d0
-        
-        ! The normal component of the shear stress resultant
-        p_temp = p(:, ii) - [ delta_f/2., 0.d0, 0.d0 ]
-        tau_temp = comp_shear_flange(p_temp, d_cl, bf)
-        p_temp = p(:, ii) + [ delta_f/2., 0.d0, 0.d0 ]
-        tau_temp = tau_temp - comp_shear_flange(p_temp, d_cl, bf)
-        tau_3 = tf * delta_f * tau_temp(1)
-        
       else if (c == corner_tag) then
         ! Sample at one-half element distance towards the web
-        p_corner(1) = -sign(1., p(1, ii)) * delta_f / 2.
+        p_corner(1) = -sign(1.d0, p(1, ii)) * delta_f / 2.
         p_corner(2:3) = 0.
         p_corner = p(:, ii) + p_corner
         tau = tf*delta_f/2.* shear_flange(p_corner, d, d1, bf, tf, tw)
@@ -761,18 +580,8 @@ module mpc_modules
         ! Correction to neglect the strong axis shear for the flanges
         ! assume all shear on the web
         tau(1) = 0.d0
-        
-        ! The normal component of the shear stress resultant
-        if (p(2, ii) < 0.) then
-          tau_3 = -abs(tau_2) * 2.
-        else
-          tau_3 = abs(tau_2) * 2.
-        end if
-        
       else  ! joint node
         tau=tf*delta_f*shear_flange(p(:, ii),d,d1,bf,tf,tw)
-        
-        !tau = tau * 0.25
         ! Correction to neglect the strong axis shear for the flanges
         ! assume all shear on the web
         tau(1) = 0.d0
@@ -780,30 +589,12 @@ module mpc_modules
         tau = tau+tw*delta_w/2.*shear_web(p(:, ii), d, d1, bf, tf, tw)
         ! Complementary shear cancels from both sides at the joint
         tau_2 = 0.
-        
-        ! The normal component of the shear stress resultant
-        ! Flange addition
-        p_temp = p(:, ii) - [ delta_f/2., 0.d0, 0.d0 ]
-        tau_temp = comp_shear_flange(p_temp, d_cl, bf)
-        p_temp = p(:, ii) + [ delta_f/2., 0.d0, 0.d0 ]
-        tau_temp = tau_temp - comp_shear_flange(p_temp, d_cl, bf)
-        tau_3 = tf * delta_f * tau_temp(1)
-        ! Web addition
-        p_temp = p(:, ii) - [ 0.d0, delta_w/2., 0.d0 ]
-        tau_temp = shear_web(p_temp, d, d1, bf, tf, tw)
-        p_temp = p(:, ii) + [ 0.d0, delta_w/2., 0.d0 ]
-        tau_temp = tau_temp - shear_web(p_temp, d, d1, bf, tf, tw)
-        tau_3 = tau_3 + tw * delta_w * tau_temp(1)
-        
       end if
-      ! Adjust for the tangent modulus
-      tau = tau * etang(ii)
       ! Record the weights
       total_strong = total_strong + tau(1)
       total_weak = total_weak + tau(2)
       v(ii, 1:2) = tau
       v(ii, 3) = tau_2
-      v(ii, 4) = tau_3  * 0.0
     end do
     
     ! Normalize the weights, the complementary takes the same 
@@ -811,11 +602,11 @@ module mpc_modules
     v(:, 1) = v(:, 1) / total_strong
     v(:, 2) = v(:, 2) / total_weak
     v(:, 3) = v(:, 3) / total_strong
-    v(:, 4) = v(:, 4) / total_strong
   end function
+  
 ! ******************************************************************** !
-!     Calculate the linearized displacement matrix
-! ******************************************************************** !
+
+  pure function calc_disp_lin(n_sh, w_all, a_total, r0, r) result(u_lin)
   ! Returns the matrix relating centroidal disp. to shell disps.
   ! @ input w_all: Area and shear weights, size 4xN
   ! @ input a_total: Total area
@@ -823,11 +614,10 @@ module mpc_modules
   ! @ input r: Rotation from initial to deformed, size 3x3
   ! @ returns: The displacement factor for each direction for each 
   !            node, size 3xN
-  pure function calc_disp_lin(n_sh, w_all, a_total, r0, r) result(u_lin)
     ! Input and output
     implicit none
     integer, intent(in) ::  n_sh
-    real(8), intent(in) ::  w_all(5, n_sh),a_total,r0(3, 3),r(3, 3)
+    real(8), intent(in) ::  w_all(4, n_sh), a_total, r0(3, 3), r(3, 3)
     real(8)             ::  u_lin(3, 3 * n_sh)
     ! Internal variables
     real(8)             ::  w_bar(3, 3), rr0(3, 3), s_bar(3, 3), t_bar(3), s(3, 3), rr0_T(3, 3)
@@ -849,8 +639,6 @@ module mpc_modules
       ! Strong axis force due to strong axis displacement
       w_bar(3, 2) = w_all(2, ii)
       w_bar(2, 3) = w_all(2, ii)
-      ! Axial force due to strong axis shear
-      w_bar(3, 3) = w_all(5, ii)
       s_bar(:, 2) = matmul(w_bar, t_bar)
       ! Axial force due to axial displacement
       w_bar = 0.d0
@@ -858,92 +646,8 @@ module mpc_modules
       s_bar(:, 3) = matmul(w_bar, t_bar)
       ! Rotate the weights from the reference to the deformed config
       s = matmul(rr0, matmul(s_bar, rr0_T))
-      u_lin(:, 3*ii-2:3*ii) = transpose(s)
+      u_lin(1:3, 3*ii-2:3*ii) = transpose(s)
     end do
-  end function
-! ******************************************************************** !
-!     Correct tangential stress under bending
-! ******************************************************************** !
-  pure function tang_force_b(n_sh, p, r0, r, df, dw, tf, tw,b,hcl) result(f_tang_b)
-    ! Returns the matrix of tangential forces for bending axial stress
-    ! @ input 
-    ! @ returns: 
-    ! Input and output
-    implicit none
-    integer, intent(in) ::  n_sh
-    real(8), intent(in) ::  p(3, n_sh), r0(3, 3), r(3, 3), df, dw, tf, tw, b, hcl
-    real(8)             ::  f_tang_b(3, n_sh)
-    ! Internal variables
-    integer             ::  i
-    real(8)             ::  moi,nu,x_vec(3),y_vec(3),sf,zero_tol,y
-    parameter               (sf = 1.0d0, zero_tol = 0.1)
-    
-    ! Assume Poisson ratio = 0.3
-    nu = 0.3
-    ! moi is the moment of intertia
-    moi = 0.d0
-    x_vec = matmul(r, r0(:, 1))
-    y_vec = matmul(r, r0(:, 2))
-    f_tang_b = 0.d0
-    do i = 1, n_sh
-      ! web
-      y = p(2, i)
-      if (abs(p(1, i)) < zero_tol) then
-        if (abs(abs(p(2, i)) - hcl / 2.) < zero_tol) then
-          ! joint nodes
-       f_tang_b(2, i)=web_f_r(y+dw/2.,dw,hcl)-web_f_r(y-dw/2.,dw,hcl)
-          f_tang_b(2, i) = f_tang_b(2, i) * nu * tw * dw / 2.d0
-          moi = moi + p(2, i) ** 2 * tw * dw / 2.
-        else
-          ! inner nodes
-          if (abs(p(2, i)) < 0.1) then
-          ! center node (now nothing different from other nodes)
-       f_tang_b(2, i)=web_f_r(y+dw/2.,dw,hcl)-web_f_r(y-dw/2.,dw,hcl)
-          f_tang_b(2, i) = f_tang_b(2, i) * nu * tw * dw / 2.d0
-          else
-       f_tang_b(2, i)=web_f_r(y+dw/2.,dw,hcl)-web_f_r(y-dw/2.,dw,hcl)
-          f_tang_b(2, i) = f_tang_b(2, i) * nu * tw * dw / 2.d0
-          end if
-          moi = moi + p(2, i) ** 2 * tw * dw
-        end if
-        ! sf = scale factor to account for flexibility
-        f_tang_b(:, i) = f_tang_b(2, i) * y_vec * sf
-      end if
-      ! flange
-      if (abs(abs(p(2, i)) - hcl / 2.) < zero_tol) then
-        if (abs(abs(p(1, i)) - b / 2.) < zero_tol) then
-          ! edge node
-          moi = moi + p(2, i) ** 2 * tf * df / 2.
-        else
-          ! inner node
-          moi = moi + p(2, i) ** 2 * tf * df
-        end if
-      end if
-    end do
-    
-    ! Normalize to unit moment
-    f_tang_b = f_tang_b / moi
-  end function
-
-! ******************************************************************** !
-
-  pure function web_f_r(y, dw, hcl) result(fdiff)
-    ! Returns restraint force
-    ! @ input 
-    ! @ returns: 
-    ! Input and output
-    implicit none
-    real(8), intent(in) ::  y, dw, hcl
-    real(8)             ::  fdiff
-    real(8)             ::  alpha, beta
-    ! Function
-    alpha = 0.10
-    beta = 2.0
-    if (abs(y) <= hcl / 2.d0) then
-      fdiff = -y / (alpha * abs(y) / (hcl / 2.d0) + 1.d0 + beta)
-    else
-      fdiff = 0.d0
-    end if
   end function
 
 ! ******************************************************************** !
@@ -974,7 +678,7 @@ module mpc_modules
         tor = tor + ff * we(ii) * norm2(p_ref(1:2, ii)) ** 2
       end if
     end do
-    tq = -1.d0 * tq / tor
+    tq = tq / tor
   end function
 
 ! ******************************************************************** !
@@ -1072,6 +776,9 @@ end function
 
   pure function compute_section_props(n_sh, xy_bar, da) result(sp)
     ! Returns the area and normalized moments of inertia that are needed for the section stiffness.
+    ! @input n_sh: Number of shell elements.
+    ! @input xy_bar: Normlized node reference x,y-cooridinates.
+    ! @input da: Node tributary areas.
     implicit none
     integer, intent(in) ::  n_sh
     real(8), intent(in) ::  xy_bar(2, n_sh), da(n_sh)
@@ -1118,22 +825,22 @@ end function
       ! Column 1
       ks(1, 1) = etang(i) * da(i) / a_bar
       ks(2, 1) = etang(i) * y * da(i) / ix_bar
-      ks(3, 1) = etang(i) * -x * da(i) / iy_bar
+      ks(3, 1) = -etang(i) * x * da(i) / iy_bar
       ks(4, 1) = etang(i) * x * y * da(i) / iw_bar
       ! Column 2
       ks(1, 2) = etang(i) * y * da(i) / a_bar
       ks(2, 2) = etang(i) * y**2 * da(i) / ix_bar
-      ks(3, 2) = etang(i) * -x * y * da(i) / iy_bar
+      ks(3, 2) = -etang(i) * x * y * da(i) / iy_bar
       ks(4, 2) = etang(i) * x * y**2 * da(i) / iw_bar
       ! Column 3
-      ks(1, 3) = etang(i) * -x * da(i) / a_bar
-      ks(2, 3) = etang(i) * -x * y * da(i) / ix_bar
+      ks(1, 3) = -etang(i) * x * da(i) / a_bar
+      ks(2, 3) = -etang(i) * x * y * da(i) / ix_bar
       ks(3, 3) = etang(i) * x**2 * da(i) / iy_bar
-      ks(4, 3) = etang(i) * -x**2 * y * da(i) / iw_bar
+      ks(4, 3) = -etang(i) * x**2 * y * da(i) / iw_bar
       ! Column 4
       ks(1, 4) = etang(i) * x * y * da(i) / a_bar
       ks(2, 4) = etang(i) * x * y**2 * da(i) / ix_bar
-      ks(3, 4) = etang(i) * -x**2 * y * da(i) / iy_bar
+      ks(3, 4) = -etang(i) * x**2 * y * da(i) / iy_bar
       ks(4, 4) = etang(i) * x**2 * y**2 * da(i) / iw_bar
       ksec = ksec + ks
     end do
@@ -1198,6 +905,119 @@ end function
     end do
   end function
   
+! ******************************************************************** !
+
+  pure function compute_node_areas(n_sh, xyz, sec_props, classification, mesh_sizes) result(areas)
+    ! Returns the area for each node.
+    implicit none
+    integer, intent(in) ::  n_sh, classification(n_sh)
+    real(8), intent(in) ::  xyz(3, n_sh), sec_props(4), mesh_sizes(2)
+    real(8)             ::  areas(n_sh)
+    integer             ::  i
+    real(8)             ::  web_area, flange_area, tol, d_cl, bf
+    integer             ::  web_tag, flange_tag, corner_tag, joint_tag
+    parameter               (web_tag=1, flange_tag=2, corner_tag=3, joint_tag=4)
+    parameter(tol=1.d-3)
+    ! Function start
+    d_cl = sec_props(1) - sec_props(3)
+    bf = sec_props(2)
+    flange_area = sec_props(3) * mesh_sizes(1)
+    web_area = sec_props(4) * mesh_sizes(2)
+    do i = 1, n_sh
+      if (classification(i) == web_tag) then
+        areas(i) = web_area
+      else if(classification(i) == flange_tag) then
+        areas(i) = flange_area
+      else if(classification(i) == joint_tag) then
+        areas(i) = flange_area + 0.5d0 * web_area
+      else if(classification(i) == corner_tag) then
+        areas(i) = 0.5d0 * flange_area
+      end if
+    end do
+  end function
+
+! ******************************************************************** !
+
+  pure function compute_mesh_size(n_sh, p, sec_props, classification) result(mesh_sizes)
+    implicit none
+    ! Returns the area for each node.
+    ! @input p: Nodes in reference config.
+    ! @returns: Mesh sizes for the flange and web, [delta_f, delta_w].
+    integer, intent(in) ::  n_sh, classification(n_sh)
+    real(8), intent(in) ::  p(3, n_sh), sec_props(4)
+    real(8)             ::  mesh_sizes(2)
+    integer             ::  i, c
+    integer             ::  web_tag, flange_tag, corner_tag, joint_tag
+    parameter               (web_tag=1, flange_tag=2, corner_tag=3, joint_tag=4)
+    real(8)             ::  x_max, x_max_2, y_max, y_max_2, tol, pt(3)
+    parameter(tol=1.d-3)
+    ! Function start
+    x_max = sec_props(2) / 2.
+    y_max = (sec_props(1) - sec_props(3)) / 2.
+    ! get mesh size
+    x_max_2 = -x_max
+    y_max_2 = -y_max
+    do i = 1, n_sh
+      pt = p(:, i)
+      c = classification(i)
+      ! Web
+      if (c == web_tag) then
+        ! Set 2nd largest y value
+        if (y_max_2 < pt(2) .and. pt(2) < y_max) then
+          y_max_2 = pt(2)
+        end if
+      end if
+      ! Flange
+      if ((c==flange_tag .or. c==joint_tag) .and. pt(2) > 0.d0) then
+        ! Set the 2nd largest x value
+        if (x_max_2 < pt(1) .and. pt(1) < x_max) then
+          x_max_2 = pt(1)
+        end if
+      end if
+    end do
+    ! Flange then web
+    mesh_sizes(1) = x_max - x_max_2
+    mesh_sizes(2) = y_max - y_max_2
+  end function
+
+! ******************************************************************** !
+  
+  pure function classify_nodes(n_sh, xyz, d_cl, bf) result(classification)
+    implicit none
+    ! Returns classification for each node.
+    ! @input xyz: Nodes in reference configuration.
+    ! @input d_cl: Centerline depth.
+    ! @input bf: Web width.
+    ! @returns: The classification for each node.
+    integer, intent(in) ::  n_sh
+    real(8), intent(in) ::  xyz(3, n_sh), d_cl, bf
+    integer             ::  classification(n_sh)
+    integer             ::  i
+    integer             ::  web_tag, flange_tag, corner_tag, joint_tag
+    parameter               (web_tag=1, flange_tag=2, corner_tag=3, joint_tag=4)
+    real(8)             ::  tol
+    parameter(tol=1.d-3)
+    ! Function start
+    do i = 1, n_sh
+      if (abs(abs(xyz(2, i)) - d_cl / 2.) < tol) then
+        ! Flange / joint nodes
+        if (abs(xyz(1, i)) < tol) then
+          ! Joint node
+          classification(i) = joint_tag
+        else if (abs(abs(xyz(1, i)) - bf / 2.) < tol) then
+          ! End node
+          classification(i) = corner_tag
+        else
+          classification(i) = flange_tag
+        end if
+      else
+        ! Web node
+        classification(i) = web_tag
+      end if
+    end do
+
+  end function
+
 ! ******************************************************************** !
 
 end module mpc_modules
