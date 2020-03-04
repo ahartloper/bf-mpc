@@ -1,5 +1,15 @@
 !DIR$ FREEFORM
 
+! Notes:
+!   - This subroutine creates global arrays that are used to:
+!     1) Store the cross-section dimensions associated with each interface
+!     2) Allow for transfer of the tangent modulus computed in UMAT subroutines to the MPC subroutine
+!   Functions must exist in the UMAT and MPC subroutines for this communication
+!   Use "git show umat_edits_incl" for the tag that indicates the last commit with functions that existed 
+!   in the UVCplanestress UMAT subroutine.
+!   The arrays that allow for transfer of the information are still created in this subroutine,
+!   but not used in the MPC's current form.
+
 
 subroutine uexternaldb(lop, lrestart, time, dtime, kstep, kinc)
   ! Sets-up the global arrays for the tangent modulus.

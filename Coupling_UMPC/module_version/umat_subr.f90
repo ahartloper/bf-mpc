@@ -1,4 +1,3 @@
-! UVC UMAT modified for the best-fit MPC
 ! This source file is kept in fixed-form
 !DIR$ NOFREEFORM
 
@@ -333,10 +332,6 @@ C         PRINT *, "WARNING: Return mapping in integration point ", npt,
 C      1  " of element ", noel, " did not converge."
 C         PRINT *, "Reducing time increment to 1/4 of current value."
         PNEWDT = 0.25
-      ELSE
-        ! Only update the tmod values if return map converged!
-        ! Set the tangent modulus for the element
-        tmodres = set_tmod(noel)
       END IF
       
       
@@ -371,55 +366,4 @@ C ----------------------------------------------------------------------C
       B(2,3) = -detinv * (A(1,1)*A(2,3) - A(1,3)*A(2,1))
       B(3,3) = +detinv * (A(1,1)*A(2,2) - A(1,2)*A(2,1))
       end function
-C ******************************************************************** C
-C Addition for best-fit MPC
-C ******************************************************************** C
-      function set_tmod(noel) result(res)
-        ! Sets the tangent modulus for the shell elem on the interface.
-        ! @input cep: Tangent moduli matrix (plane stress).
-        ! @input noel: Element number of the integration point.
-        !real                ::  cep(:, :)
-        integer             ::  asize
-        parameter(asize=1000)
-        integer             ::  TMOD_ARR_ID, ID_ARR_ID, DIR_ARR_ID
-        parameter(TMOD_ARR_ID=1,ID_ARR_ID=2,DIR_ARR_ID=3)
-        real(8)             ::  tmod_arr(asize)
-        integer             ::  id_arr(asize),direc_arr(asize),arr_loc,
-     1                          narr, direc, res
-        pointer(p_tmod, tmod_arr)
-        pointer(p_id, id_arr)
-        pointer(p_direc, direc_arr)
-#include <SMAAspUserSubroutines.hdr>
-        ! Function start
-        narr = SMAIntArraySize(ID_ARR_ID)
-        p_id = SMAIntArrayAccess(ID_ARR_ID)
-        arr_loc = loc_interf_elem(noel, id_arr, narr)
-        if (arr_loc /= -1) then
-          p_direc = SMAIntArrayAccess(DIR_ARR_ID)
-          direc = direc_arr(arr_loc)
-          p_tmod = SMAFloatArrayAccess(TMOD_ARR_ID)
-        ! todo: this only works for one integration point, what about sections in the S4R elem?
-          tmod_arr(5 * arr_loc - 5 + kspt) = ddsdde(direc, direc)
-        end if
-        res = 0
-      end function
-C ******************************************************************** C        
-      function loc_interf_elem(noel, id_arr, narr) result(res)
-        ! Returns the index in id_arr that matches noel.
-        ! @input noel: ID of element to find in id_arr.
-        ! @input id_arr: Array to search.
-        ! @input narr: Length of id_arr.
-        ! @returns: i such that id_arr(i)==noel, or -1 if not found.
-        integer, intent(in) ::  narr, noel, id_arr(narr)
-        integer             ::  res, ii
-        res = -1
-        do ii = 1, narr
-          ! todo: improve the linear search if we have a sorted array
-          if (id_arr(ii) == noel) then
-            res = ii
-            exit
-          end if
-        end do
-      end function
-C ******************************************************************** C
       END ! SUBROUTINE
