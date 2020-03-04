@@ -667,11 +667,13 @@ module mpc_modules
     real(8)             ::  tq(2, n_sh)
     real(8)             ::  tor, ff
     integer             ::  ii
+    real(8)             ::  tol
+    parameter(tol=1.d-3)
     ! Function    
     tor = 0.
     tq = 0.d0
     do ii = 1, n_sh
-      if (abs(p_ref(2, ii)) >= d_cl / 2.d0) then
+      if ( abs(abs(p_ref(2, ii)) - (d_cl / 2.d0)) < tol ) then
         ! The ff factor concentrates force at the center nodes, and lowers force towards flange tips
         ff = 1.d0 - 0.9d0 * abs(p_ref(1, ii)) / (bf / 2.d0)
         tq(1:2, ii) = ff * areas(ii) * [ -p_ref(2, ii), p_ref(1, ii) ]
