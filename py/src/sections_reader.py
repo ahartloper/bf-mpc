@@ -11,6 +11,8 @@ def section_reader(section_file):
         <tag1>,...,<tagN> are the associated beam nodes that correspond to the section definition
         <d>, <bf>, <tf>, <tw> are the total depth, flange width, flange thickness, and web thickness
 
+        Then these lines can be repeated for cross-sections with different dimensions
+
         Empty lines are ignored
         The file should not contain any other information
 
