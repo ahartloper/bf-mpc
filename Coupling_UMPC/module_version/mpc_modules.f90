@@ -652,17 +652,18 @@ module mpc_modules
 
 ! ******************************************************************** !
 
-  function torquer(n_sh, p_ref, areas, d_cl) result(tq)
+  function torquer(n_sh, p_ref, areas, d_cl, bf) result(tq)
     ! Returns torque on flange only
     ! @input n_sh: Number of shell nodes on the interface
     ! @input xyz: Coords of shell nodes in reference config.
     ! @input areas: Node areas.
     ! @input d_cl: Section centerline depth.
+    ! @input bf: Section flange width.
     ! @returns: Nodal forces due to a unit torque on the cross-section.
     ! Input and output
     implicit none
     integer, intent(in) ::  n_sh
-    real(8), intent(in) ::  p_ref(3, n_sh), areas(n_sh), d_cl
+    real(8), intent(in) ::  p_ref(3, n_sh), areas(n_sh), d_cl, bf
     real(8)             ::  tq(2, n_sh)
     real(8)             ::  tor, ff
     integer             ::  ii
@@ -671,8 +672,8 @@ module mpc_modules
     tq = 0.d0
     do ii = 1, n_sh
       if (abs(p_ref(2, ii)) >= d_cl / 2.d0) then
-        ! todo: fix this hack (the 150 and 0.5 factor) - concentrates force at the center nodes
-        ff = 1.d0 - 0.9 * abs(p_ref(1, ii)) / 150.
+        ! The ff factor concentrates force at the center nodes, and lowers force towards flange tips
+        ff = 1.d0 - 0.9d0 * abs(p_ref(1, ii)) / (bf / 2.d0)
         tq(1:2, ii) = ff * areas(ii) * [ -p_ref(2, ii), p_ref(1, ii) ]
         tor = tor + ff * areas(ii) * norm2(p_ref(1:2, ii)) ** 2
       end if

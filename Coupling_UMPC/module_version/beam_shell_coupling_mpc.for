@@ -225,7 +225,7 @@ subroutine mpc(ue, a, jdof, mdof, n, jtype, x, u, uinit, maxdof, lmpc, kstep, ki
  
   ! Rotation linearization using nodal force method
   rotw(1:2, :) = f_nodes(2:3, :)
-  rotw(3:4, :) = torquer(n_shell, x_shell_ref, node_areas, d_cl)
+  rotw(3:4, :) = torquer(n_shell, x_shell_ref, node_areas, d_cl, bf)
   rot_lin = lin_rot(n_shell, r_ref, r_mat, rotw)
  
   ! Compute the warping amplitude
