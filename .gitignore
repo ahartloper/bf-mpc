@@ -6,3 +6,4 @@ py/testing/test_model_interf_props.txt
 py/input/
 py/output/
 py/*.py
+*.mod

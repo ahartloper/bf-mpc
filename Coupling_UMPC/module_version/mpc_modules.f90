@@ -1,5 +1,7 @@
 ! Modules for the MPC subroutine in the best-fit MPC for beam-to-shell coupling
 
+#include "jacobi_eigenvalue.f90"
+
 module mpc_modules
 
   contains
@@ -121,81 +123,67 @@ module mpc_modules
     !                         eigenvector
     implicit none
     real(8), intent(in) ::  b(4, 4)
-    real(8)             ::  be(4, 4)
+    real(8)             ::  be(4, 4), v(4, 4), d(4)
     real(8)             ::  lambda_and_q(5)
-    ! For lapack
-    integer             ::  ne, nselect
-    parameter               (ne = 4, nselect = 1)
-    integer             ::  lda, ldz
-    parameter               (lda = ne, ldz = ne)
-    integer             ::  info, lwork, liwork, il, iu, m
-    real(8)             ::  abstol, vl, vu
-    integer :: lwmax
-    parameter(lwmax = 1000)
-    integer             ::  isuppz(ne), iwork(lwmax)
-    real(8)             ::  w(ne), z(ldz, nselect), work(lwmax)
-    external dsyevr
+    integer             ::  n, it_max, it_num, rot_num
+    parameter               (n = 4, it_max = 50)
     !
-    abstol = -1.0
-    il = 1
-    iu = nselect
-    ! lwork and liwork are set based on the query to the optimal 
-    ! workspace during testing
-    lwork = 104
-    liwork = 40
-    ! We need B for later, so don't overwrite
     be = b  
-    call dsyevr('Vectors', 'Indices', 'Upper', ne, be, lda, vl, vu, il, iu, abstol, m, w, z, ldz, isuppz, work, lwork, iwork, liwork, info)
-    lambda_and_q(1) = w(1)
-    lambda_and_q(2:5) = z(:, 1)
+    call jacobi_eigenvalue(n, b, it_max, v, d, it_num, rot_num)
+    lambda_and_q(1) = d(4)
+    lambda_and_q(2:5) = v(:, 4)
   end function
 
 ! ******************************************************************** !
-  
-  function calc_g(q, n_sh, b, c, lam, r) result(g)
-    ! Returns the instantaneous rotation matrix
-    ! @ input q: Optimal rotation quaternion
-    ! @ input n_sh: Number of shell nodes (N)
-    ! @ input b: \matcal{B} matrix from [2]
-    ! @ input c: C matrix from [2]
-    ! @ input lam: Minimum eigenvalue of B matrix
-    ! @ input r: Rotation matrix of optimal rotation quaternion
-    ! @ returns g: Instantaneous rotation matrix
-    ! Input and output
-    implicit none
-    integer, intent(in)   ::  n_sh
-    real(8), intent(in)   ::  q(4), b(4, 4), c(3, n_sh), r(3, 3)
-    real(8), intent(in)   ::  lam
-    real(8)               ::  g(3, 3*n_sh)
-    ! Internal
-    integer               ::  i
-    real(8)               ::  qrr(4, 4), qrr_3(4, 3), xinv(3, 3), id4(4, 4)
-    real(8)               ::  a_temp(3, n_sh)
-    ! LAPACK
-    integer               :: n_ls, nrhs
-    parameter                (n_ls = 3)
-    integer               :: lda_ls, ldb_ls
-    parameter                (lda_ls = 3, ldb_ls = 3)
-    integer               :: info
-    integer               :: ipiv(n_ls)
-    external dgesv
-    ! Function start
-    nrhs = 3 * n_sh
-    ! Calculate I_4x4
-    id4(:, :) = 0.d0
-    forall(i = 1:4) id4(i, i) = 1.d0
-    ! Calculate instantaneous rotation
-    qrr = right_quat(q(1), q(2:4))
-    qrr_3 = qrr(:, 2:4)
-    xinv = matmul(matmul(transpose(qrr_3), (b - lam * id4)), qrr_3)
-    a_temp = matmul(r, c)
-    do i = 1, n_sh
-      g(:, 3*i-2:3*i) = transpose(-skew_sym(a_temp(:, i)))
-    end do
-    call dgesv( n_ls, nrhs, xinv, lda_ls, ipiv, g, ldb_ls, info )
-    g = 4.d0 * g
+
+  ! This function is not required if using the nodal force method
+  ! The solution of a 4x4 system is required within (previously done
+  ! using LAPACK).
+
+  ! function calc_g(q, n_sh, b, c, lam, r) result(g)
+  !   ! Returns the instantaneous rotation matrix
+  !   ! @ input q: Optimal rotation quaternion
+  !   ! @ input n_sh: Number of shell nodes (N)
+  !   ! @ input b: \matcal{B} matrix from [2]
+  !   ! @ input c: C matrix from [2]
+  !   ! @ input lam: Minimum eigenvalue of B matrix
+  !   ! @ input r: Rotation matrix of optimal rotation quaternion
+  !   ! @ returns g: Instantaneous rotation matrix
+  !   ! Input and output
+  !   implicit none
+  !   integer, intent(in)   ::  n_sh
+  !   real(8), intent(in)   ::  q(4), b(4, 4), c(3, n_sh), r(3, 3)
+  !   real(8), intent(in)   ::  lam
+  !   real(8)               ::  g(3, 3*n_sh)
+  !   ! Internal
+  !   integer               ::  i
+  !   real(8)               ::  qrr(4, 4), qrr_3(4, 3), xinv(3, 3), id4(4, 4)
+  !   real(8)               ::  a_temp(3, n_sh)
+  !   ! LAPACK
+  !   integer               :: n_ls, nrhs
+  !   parameter                (n_ls = 3)
+  !   integer               :: lda_ls, ldb_ls
+  !   parameter                (lda_ls = 3, ldb_ls = 3)
+  !   integer               :: info
+  !   integer               :: ipiv(n_ls)
+  !   external dgesv
+  !   ! Function start
+  !   nrhs = 3 * n_sh
+  !   ! Calculate I_4x4
+  !   id4(:, :) = 0.d0
+  !   forall(i = 1:4) id4(i, i) = 1.d0
+  !   ! Calculate instantaneous rotation
+  !   qrr = right_quat(q(1), q(2:4))
+  !   qrr_3 = qrr(:, 2:4)
+  !   xinv = matmul(matmul(transpose(qrr_3), (b - lam * id4)), qrr_3)
+  !   a_temp = matmul(r, c)
+  !   do i = 1, n_sh
+  !     g(:, 3*i-2:3*i) = transpose(-skew_sym(a_temp(:, i)))
+  !   end do
+  !   call dgesv( n_ls, nrhs, xinv, lda_ls, ipiv, g, ldb_ls, info )
+  !   g = 4.d0 * g
     
-  end function
+  ! end function
 
 ! ******************************************************************** !
   
@@ -234,8 +222,8 @@ module mpc_modules
       real(8)             :: test
       ! z is the min eigenvalue, y is the greatest eigenvalue, 
       ! x is the remaining eigenvalue
-      zo = o(:, 1)
-      yo = o(:, 3)
+      zo = o(:, 3)
+      yo = o(:, 1)
       xo = o(:, 2)
       ! Test to see if right-handed system
       cross_vec(1) = yo(2) * zo(3) - yo(3) * zo(2)
@@ -256,7 +244,7 @@ module mpc_modules
       end function
 
 ! ******************************************************************** !
-      
+
   function ini_config(init_pts, n_sh) result(o)
     ! Returns the right-hand ordered reference configuration
     ! @ input init_pts: initial [x, y, z] coordinates of each point
@@ -269,93 +257,43 @@ module mpc_modules
     real(8), intent(in) ::  init_pts(3, n_sh)
     real(8)             ::  o(3, 3)
     ! Internal
-    real(8)             ::  zero
-    integer             ::  i
-    parameter               (zero=0.d0)
-    integer             ::  ne, nselect
-    parameter               (ne = 3, nselect = 3)
-    integer             ::  lda, ldz
-    parameter               (lda = ne, ldz = ne)
-    integer             ::  info, lwork, liwork, il, iu, m
-    real(8)             ::  abstol, vl, vu
-    integer             ::  lwmax
-    parameter               (lwmax = 1000)
-    integer             ::  isuppz(ne), iwork(lwmax)
-    double precision    ::  ae(lda, ne), w(ne), z(ldz, nselect), work(lwmax)
-    external dsyevr
+    real(8)             ::  ae(3, 3), v(3, 3), d(3)
+    integer             ::  ii, n, it_max, it_num, rot_num
+    parameter               (n = 3, it_max = 50)
     !
-    ae(:, :) = zero
+    ae(:, :) = 0.d0
     ! The spread is used to compute the outer product of two vectors
-    do i = 1, n_sh
-      ae = ae + spread(init_pts(:, i), dim=2, ncopies=3) * spread(init_pts(:, i), dim=1, ncopies=3)
+    do ii = 1, n_sh
+      ae = ae + spread(init_pts(:, ii), dim=2, ncopies=3) * spread(init_pts(:, ii), dim=1, ncopies=3)
     end do
-    
-    abstol = -1.0
-    il = 1
-    iu = nselect
-    ! lwork and liwork are set based on the query to the optimal 
-    ! workspace during testing
-    lwork = 104
-    liwork = 40
-    call dsyevr('Vectors', 'A', 'Upper', ne, ae, lda, vl, vu, il, &
-               iu, abstol, m, w, z, ldz, isuppz, work, lwork, iwork, &
-               liwork, info)
-    ! The eigenvalues are returned in asscending order
-    o = order_ini(z)
+    call jacobi_eigenvalue(n, ae, it_max, v, d, it_num, rot_num)
+    ! The eigenvalues are returned in descending order
+    o = order_ini(v)
   end function
 
 ! ******************************************************************** !
   
-  pure function warp_fun(c, n_sh, r0) result(psi)
+  pure function warp_fun(c, n_sh) result(psi)
   ! Returns the warping function evaluated at each node.
-  ! @ input c: Location of nodes in initial config. relative to 
-  !            centroid, size 3xN
+  ! @ input c: Location of nodes in reference config., size 3xN
   ! @ input n_sh: Number of shell nodes (N)
-  ! @ input r0: Rotation from reference to initial configuration
   ! @ returns psi: Warping function at each node.
-  !
-  ! Notes:
-  !   - If the distance between adjacent nodes is less than 1e-8
-  !   then nodes on the web can be incorrectly identified
     ! Input and output
     implicit none
     integer, intent(in)   ::  n_sh
-    real(8), intent(in)   :: c(3, n_sh), r0(3, 3)
-    real(8)               :: psi(n_sh), c2(3, n_sh)
-    ! Internal
-    real(8)             :: s, s1, s2, two2, four, tol
-    parameter              (two2 = 2.d0, four = 4.d0, tol = 1.d-8)
-    integer             :: ii
-    ! Allocate array
-    ! Rotate from the initial config to the reference config
-    c2 = matmul(transpose(r0), c)
-    ! Calculate the width and depth of the section
-    s1 = two2 * maxval(c2(1, :))
-    s2 = two2 * maxval(c2(2, :))
+    real(8), intent(in)   ::  c(3, n_sh)
+    real(8)               ::  psi(n_sh)
+    integer               ::  ii
     ! Calculate the warping function, \psi = X*Y
-    ! todo: clean this function up
     do ii = 1, n_sh
-      if (abs(c2(2, ii) - s2 / two2 ) < tol) then
-        ! Node is on the top flange
-        s = c2(1, ii) + s1 / two2
-        !psi(ii) = -s2 * (s1 - two2 * s) / four
-        psi(ii) = c2(1, ii) * c2(2, ii)
-      else if (abs(c2(2, ii) + s2 / two2 ) < tol) then
-        ! Node is on the bottom flange
-        s = c2(1, ii) + s1 / two2
-        !psi(ii) = s2 * (s1 - two2 * s) / four
-        psi(ii) = c2(1, ii) * c2(2, ii)
-      else
-        ! Node is on the web line
-        psi(ii) = 0.d0
-      end if
+        psi(ii) = c(1, ii) * c(2, ii)
     end do
   end function
 
 ! ******************************************************************** !
   
   pure function warp_amp(x_ini, x_def, u_c, t, r, psi) result(w)
-  ! Returns the value of the warping amplitude.
+  ! Returns the value of the averaged warping amplitude.
   ! @ input x_ini: pos. of each node in the initial configuration
   ! @ input x_def: pos. of each node in the deformed configuration
   ! @ input u_c: Translation of the centroid
