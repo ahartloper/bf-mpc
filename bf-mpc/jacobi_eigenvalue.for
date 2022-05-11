@@ -1,6 +1,4 @@
-      subroutine jacobi_eigenvalue ( n, a, it_max, v, d, it_num, 
-     1                              rot_num )
-
+      subroutine jacobi_eigenvalue(n,a,it_max,v,d,it_num,rot_num)
 !*****************************************************************************80
 !
 !! JACOBI_EIGENVALUE carries out the Jacobi eigenvalue iteration.
@@ -118,9 +116,9 @@
 !
 !  Annihilate tiny offdiagonal elements.
 !
-        if ( 4 < it_num .and. &
-             termp == abs ( d(p) ) .and. &
-             termq == abs ( d(q) ) ) then
+        if ( 4 < it_num .and. 
+     1        termp == abs ( d(p) ) .and. 
+     2        termq == abs ( d(q) ) ) then
 
           a(p,q) = 0.0D+00
 !
@@ -237,8 +235,9 @@
 
         return
       end
-      subroutine r8mat_diag_get_vector ( n, a, v )
 
+
+      subroutine r8mat_diag_get_vector ( n, a, v )
 !*****************************************************************************80
 !
 !! R8MAT_DIAG_GET_VECTOR gets the value of the diagonal of an R8MAT.
@@ -283,8 +282,9 @@
 
         return
       end
-      subroutine r8mat_identity ( n, a )
 
+
+      subroutine r8mat_identity ( n, a )
 !*****************************************************************************80
 !
 !! R8MAT_IDENTITY stores the identity matrix in an R8MAT.
@@ -326,9 +326,10 @@
 
       return
       end
+
+
       subroutine r8mat_is_eigen_right ( n, k, a, x, lambda, 
      1   error_frobenius )
-
 !*****************************************************************************80
 !
 !! R8MAT_IS_EIGEN_RIGHT determines the error in a (right) eigensystem.
@@ -401,8 +402,9 @@
 
       return
       end
-      function r8mat_norm_fro ( m, n, a )
 
+
+      function r8mat_norm_fro ( m, n, a )
 !*****************************************************************************80
 !
 !! R8MAT_NORM_FRO returns the Frobenius norm of an M by N R8MAT.
@@ -453,4 +455,3 @@
 
       return
       end
-      subroutine r8mat_print ( m, n, a, title )
