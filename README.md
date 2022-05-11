@@ -9,6 +9,9 @@ This repository mainly contains two things: (1) the BF-MPC user subroutine for A
 The user subroutine can be used in a valid Abaqus model to couple beam-column element and continuum element domains (i.e., shell or solid elements).
 The pre-processor is useful to generate a file that is used by the user MPC subroutine.
 
+
+**IMPORTANT:** The code in the main branch is currently undergoing modification to make it compatible with recent versions of Abaqus (2019+) and the new Intel Fortran compilers. A new release with the finalized code and example analyses will be tagged when the modifications are complete.
+
 Notes:
 - The source code for the BF-MPC method is provided for clarity regarding the method and its implementation.
 The current implementation is not considered to be optimal in terms of minimizing the number of operations carried out within the routine nor in minimizing the memory used by the subroutine.
